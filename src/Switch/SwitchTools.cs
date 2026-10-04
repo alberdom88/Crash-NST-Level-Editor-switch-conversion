@@ -50,6 +50,8 @@ namespace NST
             public string? PcOriginals;
             public bool RenameBack;
             public string IgzMode = "maps";
+            public string? ReplaceLevel;
+            public bool WithoutBase;
         }
 
         public static int Run(string[] args)
@@ -110,6 +112,8 @@ namespace NST
                 else if (name == "--pc-originali" && hasValue) { options.PcOriginals = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--come-originale") { options.RenameBack = true; rest.RemoveAt(i); }
                 else if (name == "--igz" && hasValue) { options.IgzMode = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--sostituisci" && hasValue) { options.ReplaceLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--senza-base") { options.WithoutBase = true; rest.RemoveAt(i); }
                 else i++;
             }
             return options;
@@ -122,7 +126,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1284,6 +1288,79 @@ namespace NST
             return count;
         }
 
+        // ------------------------------------------------------------------ sostituzione di un livello
+
+        /// <summary>
+        /// Renaming of a level: folder (Crash1/Custom_Level -> Crash3/L301_ToadVillage) and name
+        /// </summary>
+        private class LevelRename
+        {
+            public string FromName = "";
+            public string ToName = "";
+            public string? FromDir;
+            public string? ToDir;
+
+            public string Apply(string path)
+            {
+                string result = path;
+                if (FromDir != null && ToDir != null && !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    result = ReplaceIgnoreCase(result, "/" + FromDir + "/", "/" + ToDir + "/");
+                }
+                return ReplaceIgnoreCase(result, FromName, ToName);
+            }
+
+            public override string ToString()
+            {
+                string dirs = FromDir != null && ToDir != null && !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase) ? $" (cartella {FromDir} -> {ToDir})" : "";
+                return $"{FromName} -> {ToName}{dirs}";
+            }
+        }
+
+        /// <summary>
+        /// Folder ("Crash1/L112_RoadToNowhere") and level name of a package file path
+        /// (packages/generated/maps/[game]/[folder]/[level]_pkg.igz)
+        /// </summary>
+        private static (string dir, string name)? PackageInfo(string path)
+        {
+            const string prefix = "packages/generated/maps/";
+            const string suffix = "_pkg.igz";
+            if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return null;
+
+            string[] parts = path.Substring(prefix.Length).Split('/');
+            if (parts.Length != 3) return null;
+
+            return (parts[0] + "/" + parts[1], parts[2].Substring(0, parts[2].Length - suffix.Length));
+        }
+
+        /// <summary>
+        /// The level of the PC archive takes the place of an original Switch level
+        /// </summary>
+        private static LevelRename? FindReplacement(IgArchive pc, ArchiveIndex sw, string levelName, out IgArchiveFile? switchPackage)
+        {
+            switchPackage = null;
+
+            var pcPackage = pc.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null);
+            if (pcPackage == null) return null;
+
+            foreach (IgArchiveFile file in sw.ByPath.Values)
+            {
+                var info = PackageInfo(file.Path);
+                if (info == null || !info.Value.name.Equals(levelName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                switchPackage = file;
+                return new LevelRename
+                {
+                    FromName = pcPackage.Value.name,
+                    ToName = info.Value.name,
+                    FromDir = pcPackage.Value.dir,
+                    ToDir = info.Value.dir,
+                };
+            }
+
+            return null;
+        }
+
         // ------------------------------------------------------------------ converti
 
         /// <summary>
@@ -1322,19 +1399,43 @@ namespace NST
 
             IgArchive pc = IgArchive.Open(pcPath);
             List<string> levels = LevelNames(pc.Files.Select(f => f.Path));
-            (string from, string to)? rename = options.RenameBack ? DetectRename(pc, index) : null;
+            report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
+
+            LevelRename? rename = null;
+            string? baseArchive = null;
+
+            if (options.ReplaceLevel != null)
+            {
+                // The level replaces the chosen original level
+                rename = FindReplacement(pc, sw, options.ReplaceLevel, out IgArchiveFile? switchPackage);
+                if (rename == null || switchPackage == null)
+                {
+                    report.AppendLine($"--sostituisci: livello {options.ReplaceLevel} non trovato nel gioco Switch");
+                    Console.WriteLine($"Errore: livello {options.ReplaceLevel} non trovato nel gioco Switch (usa il nome del file .pak, per esempio L101_NSanityBeach)");
+                    File.WriteAllText(reportPath, report.ToString());
+                    return 1;
+                }
+                baseArchive = sw.ArchiveOf.GetValueOrDefault(switchPackage);
+                report.AppendLine($"il livello sostituisce {rename.ToName}: {rename}");
+            }
+            else if (options.RenameBack)
+            {
+                // Level created from an original one (..._Custom): it takes back the original name
+                var detected = DetectRename(pc, index);
+                if (detected != null) rename = new LevelRename { FromName = detected.Value.from, ToName = detected.Value.to };
+                report.AppendLine(rename != null
+                    ? $"il livello prende il nome dell'originale: {rename}"
+                    : "--come-originale: livello originale non trovato, nomi lasciati invariati (per un livello nuovo usa --sostituisci <livello>)");
+            }
 
             // Archive of the original level in the Switch game (base of the new archive)
-            string? baseLevel = rename?.to ?? levels.FirstOrDefault();
-            string? baseArchive = baseLevel != null && sw.ByArchive.ContainsKey(baseLevel.ToLowerInvariant()) ? baseLevel.ToLowerInvariant() : null;
-
-            report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
-            if (options.RenameBack)
+            if (baseArchive == null)
             {
-                report.AppendLine(rename != null
-                    ? $"il livello prende il nome dell'originale: {rename.Value.from} -> {rename.Value.to}"
-                    : "--come-originale: livello originale non trovato, nomi lasciati invariati");
+                string? baseLevel = rename?.ToName ?? levels.FirstOrDefault();
+                if (baseLevel != null && sw.ByArchive.ContainsKey(baseLevel.ToLowerInvariant())) baseArchive = baseLevel.ToLowerInvariant();
             }
+            if (options.WithoutBase) baseArchive = null;
+
             report.AppendLine(baseArchive != null ? $"archivio Switch di partenza: {baseArchive}.pak" : "archivio Switch di partenza: nessuno");
             report.AppendLine();
 
@@ -1344,7 +1445,7 @@ namespace NST
             {
                 foreach (IgArchiveFile file in pc.Files)
                 {
-                    string target = ReplaceIgnoreCase(file.Path, rename.Value.from, rename.Value.to);
+                    string target = rename.Apply(file.Path);
                     if (target == file.Path) continue;
                     renamedNamespaces[NamespaceUtils.GetFileName(file.Path, false)] = NamespaceUtils.GetFileName(target, false);
                 }
@@ -1381,7 +1482,7 @@ namespace NST
                         continue;
                     }
 
-                    string target = rename != null ? ReplaceIgnoreCase(path, rename.Value.from, rename.Value.to) : path;
+                    string target = rename != null ? rename.Apply(path) : path;
                     if (included.Contains(target.ToLowerInvariant())) continue;
 
                     index.TryGetValue(target.ToLowerInvariant(), out IgArchiveFile? original);
@@ -1469,14 +1570,33 @@ namespace NST
                         {
                             int renamedCount = RenameNamespaces(igz, renamedNamespaces);
 
-                            // Names stored as text (e.g. the name list of the static collision)
-                            foreach (igNameList list in igz.Objects.OfType<igNameList>())
+                            // Name of the static collision, stored as text in its name list
+                            if (collision)
                             {
-                                foreach (igNameMetaField entry in list._data)
+                                foreach (igNameList list in igz.Objects.OfType<igNameList>())
                                 {
-                                    if (entry._name == null || !entry._name.Contains(rename.Value.from, StringComparison.OrdinalIgnoreCase)) continue;
-                                    entry._name = ReplaceIgnoreCase(entry._name, rename.Value.from, rename.Value.to);
-                                    renamedCount++;
+                                    foreach (igNameMetaField entry in list._data)
+                                    {
+                                        if (entry._name == null || !entry._name.Contains(rename.FromName, StringComparison.OrdinalIgnoreCase)) continue;
+                                        entry._name = ReplaceIgnoreCase(entry._name, rename.FromName, rename.ToName);
+                                        renamedCount++;
+                                    }
+                                }
+                            }
+
+                            // Files listed by the package (keeping their type)
+                            if (PackageInfo(target) != null)
+                            {
+                                foreach (igStreamingChunkInfo info in igz.Objects.OfType<igStreamingChunkInfo>())
+                                {
+                                    foreach (ChunkFileInfoMetaField entry in info._required._data)
+                                    {
+                                        if (entry._name == null) continue;
+                                        string renamedName = rename.Apply(entry._name);
+                                        if (renamedName == entry._name) continue;
+                                        entry._name = renamedName.ToLowerInvariant();
+                                        renamedCount++;
+                                    }
                                 }
                             }
 

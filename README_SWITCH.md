@@ -31,7 +31,7 @@ NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--m
 NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]
 NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
-        [--come-originale] [--pc-originali <cartella_archives_pc>]
+        [--come-originale | --sostituisci <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]
 ```
 
 - `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti,
@@ -55,8 +55,12 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
   Switch (per esempio le texture Switch dei materiali, che hanno nomi diversi da quelle PC).
   - `--pc-originali`: cartella `archives` del gioco PC; i file identici agli originali
     PC vengono presi dagli originali Switch.
-  - `--come-originale`: il livello creato dall'editor (`..._Custom`) riprende il nome
-    del livello originale, cosi' l'archivio puo' sostituirlo.
+  - `--come-originale`: il livello creato dall'editor da un livello esistente
+    (`..._Custom`) riprende il nome del livello originale, cosi' l'archivio puo' sostituirlo.
+  - `--sostituisci <livello>`: per i livelli nuovi (`Custom_Level`) o per metterli al posto
+    di un altro livello: cartella, nomi dei file e riferimenti diventano quelli del livello
+    scelto (per esempio `L101_NSanityBeach`), e l'archivio va installato con il suo nome.
+  - `--senza-base`: non aggiunge gli asset dell'archivio Switch del livello sostituito.
   La collisione statica del livello (Havok) viene convertita: i file Havok della Switch
   usano la stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor
   conosce gia'. La grafica non viene convertita: si usano gli originali Switch.
