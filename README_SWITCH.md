@@ -29,6 +29,7 @@ LZMA (4 byte), piattaforma negli igz (2).
 NST.exe --switch layout [report.txt]
 NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]
 NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]
+NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--come-originale] [--pc-originali <cartella_archives_pc>]
 ```
@@ -44,8 +45,14 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
   valori; riscrive poi il file PC in formato Switch e lo rilegge. Con l'archivio
   originale PC di un livello (stessi contenuti della Switch) le differenze che restano
   sono solo quelle di piattaforma.
-- `converti` (sperimentale): crea un archivio Switch. I file non modificati e gli asset
-  condivisi vengono presi dagli originali Switch, i file del livello vengono convertiti.
+- `riscrivi`: riscrive un archivio Switch originale con l'editor, per provare in gioco
+  la scrittura degli archivi (`--igz nessuno`) e degli igz (`maps`: file del livello,
+  `tutti`: tutti tranne le texture). Il rapporto dice quanti igz riscritti sono
+  identici byte per byte all'originale.
+- `converti` (sperimentale): crea un archivio Switch partendo dall'archivio Switch del
+  livello originale. I file di posizionamento del livello (`maps/`) vengono convertiti
+  dal PC; gli asset vengono presi dagli originali Switch, insieme alle loro dipendenze
+  Switch (per esempio le texture Switch dei materiali, che hanno nomi diversi da quelle PC).
   - `--pc-originali`: cartella `archives` del gioco PC; i file identici agli originali
     PC vengono presi dagli originali Switch.
   - `--come-originale`: il livello creato dall'editor (`..._Custom`) riprende il nome

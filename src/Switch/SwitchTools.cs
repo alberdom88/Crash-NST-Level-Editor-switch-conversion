@@ -21,6 +21,10 @@ namespace NST
     ///       with the PC layout and the Switch file with the computed Switch layout, then compares
     ///       all the values. Also rewrites the PC file with the Switch layout and reads it back.
     ///
+    ///   NST.exe --switch riscrivi &lt;switch.pak&gt; &lt;output.pak&gt; [report.txt] [--igz nessuno|maps|tutti]
+    ///       Rewrites a Switch archive with the editor, optionally rewriting its igz files
+    ///       (test of the archive and igz writers in the game).
+    ///
     ///   NST.exe --switch converti &lt;pc.pak&gt; &lt;switch_dump_folder&gt; &lt;output.pak&gt; [report.txt]
     ///           [--come-originale] [--pc-originali &lt;pc_archives_folder&gt;]
     ///       Builds a Switch archive: unmodified assets are taken from the Switch game, the files of
@@ -45,6 +49,7 @@ namespace NST
             public string? PakFilter;
             public string? PcOriginals;
             public bool RenameBack;
+            public string IgzMode = "maps";
         }
 
         public static int Run(string[] args)
@@ -71,6 +76,9 @@ namespace NST
                     case "verifica":
                         if (rest.Count < 2) break;
                         return Verify(rest[0], rest[1], rest.Count > 2 ? rest[2] : "switch_verifica.txt", options.Max);
+                    case "riscrivi":
+                        if (rest.Count < 2) break;
+                        return Rewrite(rest[0], rest[1], rest.Count > 2 ? rest[2] : "switch_riscrivi.txt", options);
                     case "converti":
                         if (rest.Count < 3) break;
                         return Convert(rest[0], rest[1], rest[2], rest.Count > 3 ? rest[3] : "switch_converti.txt", options);
@@ -101,6 +109,7 @@ namespace NST
                 else if (name == "--pak" && hasValue) { options.PakFilter = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--pc-originali" && hasValue) { options.PcOriginals = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--come-originale") { options.RenameBack = true; rest.RemoveAt(i); }
+                else if (name == "--igz" && hasValue) { options.IgzMode = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -112,6 +121,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch layout [report.txt]");
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
+            Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
             Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale] [--pc-originali <cartella_archives_pc>]");
         }
 
@@ -989,6 +999,214 @@ namespace NST
             Console.WriteLine($"Campi uguali in lettura: {percent:F2}%  (rapporto completo: {reportPath})");
         }
 
+        // ------------------------------------------------------------------ indice degli archivi Switch
+
+        /// <summary>
+        /// Files of the Switch game: by path, by archive, and by name inside each archive
+        /// </summary>
+        private class ArchiveIndex
+        {
+            public Dictionary<string, IgArchiveFile> ByPath = [];                       // lowercase path -> first file
+            public Dictionary<string, List<IgArchiveFile>> ByArchive = [];              // lowercase archive name -> files
+            public Dictionary<IgArchiveFile, string> ArchiveOf = [];                    // file -> lowercase archive name
+            private readonly Dictionary<string, Dictionary<string, List<IgArchiveFile>>> _names = [];
+
+            public static ArchiveIndex Build(string folder, List<string>? errors)
+            {
+                var index = new ArchiveIndex();
+
+                foreach (string pakPath in PakFiles(folder))
+                {
+                    try
+                    {
+                        IgArchive archive = IgArchive.Open(pakPath);
+                        string key = Path.GetFileNameWithoutExtension(pakPath).ToLowerInvariant();
+                        if (!index.ByArchive.TryGetValue(key, out List<IgArchiveFile>? list))
+                        {
+                            list = [];
+                            index.ByArchive[key] = list;
+                        }
+
+                        foreach (IgArchiveFile file in archive.Files)
+                        {
+                            index.ByPath.TryAdd(file.Path.ToLowerInvariant(), file);
+                            index.ArchiveOf[file] = key;
+                            list.Add(file);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        errors?.Add($"Archivio {Path.GetFileName(pakPath)}: {e.Message}");
+                    }
+                }
+
+                return index;
+            }
+
+            /// <summary>
+            /// Files of an archive by namespace (file name without extension, lowercase)
+            /// </summary>
+            public Dictionary<string, List<IgArchiveFile>> Names(string archive)
+            {
+                if (_names.TryGetValue(archive, out var cached)) return cached;
+
+                var names = new Dictionary<string, List<IgArchiveFile>>();
+                foreach (IgArchiveFile file in ByArchive.GetValueOrDefault(archive) ?? [])
+                {
+                    string lower = file.Path.ToLowerInvariant();
+                    if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/") || lower.Contains("staticcollision")) continue;
+
+                    foreach (string name in NameAliases(NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant()))
+                    {
+                        if (!names.TryGetValue(name, out List<IgArchiveFile>? list))
+                        {
+                            list = [];
+                            names[name] = list;
+                        }
+                        list.Add(file);
+                    }
+                }
+
+                _names[archive] = names;
+                return names;
+            }
+        }
+
+        /// <summary>
+        /// Names under which a file can be referenced (same rules as the editor)
+        /// </summary>
+        private static IEnumerable<string> NameAliases(string name)
+        {
+            yield return name;
+
+            string alias = name;
+            if (alias.StartsWith("shared")) alias = alias.Substring(6);
+            if (alias.EndsWith("_character")) alias = alias.Substring(0, alias.Length - 10);
+            else if (alias.EndsWith("_behavior")) alias = alias.Substring(0, alias.Length - 9);
+            else if (alias.EndsWith("_script")) alias = alias.Substring(0, alias.Length - 7);
+
+            if (alias != name && alias.Length > 0) yield return alias;
+        }
+
+        /// <summary>
+        /// Namespaces referenced by an igz file (TDEP dependencies and named references),
+        /// read from the fixups only: it doesn't depend on the object layouts
+        /// </summary>
+        private static HashSet<string> RawDependencies(byte[] data)
+        {
+            var names = new HashSet<string>();
+            if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return names;
+
+            using var reader = new BinaryReader(new MemoryStream(data));
+            reader.BaseStream.Position = BitConverter.ToInt32(data, 0x18);
+            FixupCollection fixups = FixupCollection.Parse(reader);
+
+            void Add(string? value)
+            {
+                if (string.IsNullOrEmpty(value)) return;
+                names.Add(value.ToLowerInvariant());
+                string fileName = NamespaceUtils.GetFileName(value, false).ToLowerInvariant();
+                if (fileName.Length > 0) names.Add(fileName);
+            }
+
+            foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
+            {
+                Add(item.name);
+                Add(item.path);
+            }
+
+            foreach (NamedReference reference in fixups.handleReferences) Add(reference.namespaceName);
+            foreach (NamedReference reference in fixups.objectReferences) Add(reference.namespaceName);
+            foreach (NamedReference reference in fixups.exidReferences) Add(reference.namespaceName);
+
+            return names;
+        }
+
+        // ------------------------------------------------------------------ riscrivi
+
+        /// <summary>
+        /// Rewrite a Switch archive with the editor (test of the archive and igz writers)
+        /// </summary>
+        private static int Rewrite(string inputPath, string outputPath, string reportPath, Options options)
+        {
+            string mode = options.IgzMode.ToLowerInvariant();
+            var report = new StringBuilder();
+            report.AppendLine("RISCRITTURA DI UN ARCHIVIO SWITCH");
+            report.AppendLine($"archivio: {inputPath}");
+            report.AppendLine($"output: {outputPath}");
+            report.AppendLine($"igz riscritti: {mode} (nessuno = solo archivio, maps = file del livello, tutti = tutti tranne le texture)");
+            report.AppendLine();
+
+            IgArchive input = IgArchive.Open(inputPath);
+            IgArchive output = new IgArchive(outputPath, input.GameVersion);
+            var counters = new Dictionary<string, int>();
+            var lines = new List<string>();
+
+            foreach (IgArchiveFile file in input.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                bool rewrite = file.IsIGZ() && (
+                    (mode == "maps" && (lower.StartsWith("maps/") || lower.StartsWith("packages/"))) ||
+                    (mode == "tutti" && !lower.StartsWith("textures/")));
+
+                if (!rewrite)
+                {
+                    output.AddFile(file.Clone());
+                    Increment(counters, "copiati senza modifiche");
+                    continue;
+                }
+
+                try
+                {
+                    byte[] original = file.Uncompress();
+                    IgzFile igz = new IgzFile(file.Path, original, input.GameVersion);
+                    byte[] data = igz.Save(null, true);
+
+                    IgArchiveFile copy = file.Clone();
+                    copy.SetData(data);
+                    output.AddFile(copy);
+
+                    if (data.AsSpan().SequenceEqual(original))
+                    {
+                        Increment(counters, "igz riscritti identici all'originale");
+                    }
+                    else
+                    {
+                        Increment(counters, data.Length == original.Length ? "igz riscritti diversi (stessa dimensione)" : "igz riscritti diversi (dimensione diversa)");
+                        int first = FirstDifference(original, data);
+                        lines.Add($"diverso: {file.Path} ({original.Length} -> {data.Length} byte, primo byte diverso 0x{first:X})");
+                    }
+                }
+                catch (Exception e)
+                {
+                    output.AddFile(file.Clone());
+                    Increment(counters, "igz non riscrivibili (copiati)");
+                    lines.Add($"ERRORE {file.Path}: {e.GetType().Name}: {e.Message}");
+                }
+            }
+
+            output.Save(outputPath);
+
+            foreach (var (key, count) in counters.OrderBy(e => e.Key)) report.AppendLine($"  {key}: {count}");
+            report.AppendLine();
+            foreach (string line in lines) report.AppendLine("  " + line);
+
+            File.WriteAllText(reportPath, report.ToString());
+            foreach (var (key, count) in counters.OrderBy(e => e.Key)) Console.WriteLine($"  {key}: {count}");
+            Console.WriteLine($"Archivio scritto in {outputPath} (dettagli in {reportPath})");
+            return 0;
+        }
+
+        private static int FirstDifference(byte[] a, byte[] b)
+        {
+            int length = Math.Min(a.Length, b.Length);
+            for (int i = 0; i < length; i++)
+            {
+                if (a[i] != b[i]) return i;
+            }
+            return length;
+        }
+
         // ------------------------------------------------------------------ converti
 
         /// <summary>
@@ -1014,19 +1232,24 @@ namespace NST
             report.AppendLine($"output: {outputPath}");
 
             Console.WriteLine("Indicizzo gli archivi Switch...");
-            Dictionary<string, IgArchiveFile> index = IndexArchives(switchDir, null);
+            ArchiveIndex sw = ArchiveIndex.Build(switchDir, null);
+            Dictionary<string, IgArchiveFile> index = sw.ByPath;
 
             Dictionary<string, IgArchiveFile>? pcIndex = null;
             if (options.PcOriginals != null)
             {
                 Console.WriteLine("Indicizzo gli archivi originali PC...");
-                pcIndex = IndexArchives(options.PcOriginals, null);
+                pcIndex = ArchiveIndex.Build(options.PcOriginals, null).ByPath;
                 report.AppendLine($"originali PC: {options.PcOriginals} ({pcIndex.Count} file)");
             }
 
             IgArchive pc = IgArchive.Open(pcPath);
             List<string> levels = LevelNames(pc.Files.Select(f => f.Path));
             (string from, string to)? rename = options.RenameBack ? DetectRename(pc, index) : null;
+
+            // Archive of the original level in the Switch game (base of the new archive)
+            string? baseLevel = rename?.to ?? levels.FirstOrDefault();
+            string? baseArchive = baseLevel != null && sw.ByArchive.ContainsKey(baseLevel.ToLowerInvariant()) ? baseLevel.ToLowerInvariant() : null;
 
             report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
             if (options.RenameBack)
@@ -1035,12 +1258,23 @@ namespace NST
                     ? $"il livello prende il nome dell'originale: {rename.Value.from} -> {rename.Value.to}"
                     : "--come-originale: livello originale non trovato, nomi lasciati invariati");
             }
+            report.AppendLine(baseArchive != null ? $"archivio Switch di partenza: {baseArchive}.pak" : "archivio Switch di partenza: nessuno");
             report.AppendLine();
 
             IgArchive output = new IgArchive(outputPath, GameVersion.NSX);
+            var included = new HashSet<string>();
+            var fromSwitch = new List<IgArchiveFile>();
             var counters = new Dictionary<string, int>();
             var lines = new List<string>();
             int done = 0;
+
+            void AddOriginal(IgArchiveFile file, string counter)
+            {
+                if (!included.Add(file.Path.ToLowerInvariant())) return;
+                output.AddFile(file.Clone());
+                fromSwitch.Add(file);
+                Increment(counters, counter);
+            }
 
             foreach (IgArchiveFile file in pc.Files)
             {
@@ -1059,6 +1293,8 @@ namespace NST
                     }
 
                     string target = rename != null ? ReplaceIgnoreCase(path, rename.Value.from, rename.Value.to) : path;
+                    if (included.Contains(target.ToLowerInvariant())) continue;
+
                     index.TryGetValue(target.ToLowerInvariant(), out IgArchiveFile? original);
 
                     bool? unmodified = null;
@@ -1070,13 +1306,12 @@ namespace NST
                     bool levelContent = IsLevelContent(path, levels);
                     bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
 
-                    // Unmodified file, shared asset or collision that exists in the Switch game: use the Switch version
-                    if (original != null && (unmodified == true || (unmodified == null && !levelContent) || collision))
+                    if (original != null)
                     {
-                        output.AddFile(original.Clone());
-                        Increment(counters, unmodified == true ? "non modificati: presi dagli originali Switch" : collision ? "collisioni prese dagli originali Switch" : "presi dagli originali Switch");
-                        if (collision && unmodified != true) lines.Add($"collisione originale Switch (eventuali modifiche PC perse): {target}");
-                        continue;
+                        if (unmodified == true) { AddOriginal(original, "non modificati: presi dagli originali Switch"); continue; }
+                        if (collision) { AddOriginal(original, "collisioni prese dagli originali Switch"); lines.Add($"collisione originale Switch (eventuali modifiche PC perse): {target}"); continue; }
+                        if (!file.IsIGZ()) { AddOriginal(original, "file non igz presi dagli originali Switch"); continue; }
+                        if (unmodified == null && !levelContent) { AddOriginal(original, "asset presi dagli originali Switch"); continue; }
                     }
 
                     if (file.IsIGZ())
@@ -1088,9 +1323,12 @@ namespace NST
                         {
                             if (original != null)
                             {
-                                output.AddFile(original.Clone());
-                                Increment(counters, "grafica presa dagli originali Switch");
+                                AddOriginal(original, "grafica presa dagli originali Switch");
                                 lines.Add($"grafica, originale Switch: {target}");
+                            }
+                            else if (path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Increment(counters, "texture PC senza equivalente con lo stesso nome (saltate)");
                             }
                             else
                             {
@@ -1106,41 +1344,69 @@ namespace NST
                         IgArchiveFile converted = new IgArchiveFile(target, GameVersion.NSX);
                         converted.SetData(igz.Save(newNamespace));
                         output.AddFile(converted);
+                        included.Add(target.ToLowerInvariant());
 
                         Increment(counters, unmodified == false ? "igz modificati convertiti" : "igz convertiti");
-                        if (target != path) lines.Add($"rinominato: {path} -> {target}");
-                        continue;
-                    }
-
-                    if (file.IsHKX())
-                    {
-                        if (original != null)
-                        {
-                            output.AddFile(original.Clone());
-                            Increment(counters, "havok presi dagli originali Switch");
-                            lines.Add($"havok originale Switch (modifiche PC perse): {target}");
-                        }
-                        else
-                        {
-                            IgArchiveFile hkx = new IgArchiveFile(target, GameVersion.NSX);
-                            hkx.SetData(file.Uncompress());
-                            output.AddFile(hkx);
-                            Increment(counters, "havok PC copiati senza conversione (probabilmente non funzionano)");
-                            lines.Add($"havok PC copiato senza conversione: {target}");
-                        }
+                        lines.Add(target != path ? $"convertito e rinominato: {path} -> {target}" : $"convertito: {path}");
                         continue;
                     }
 
                     IgArchiveFile copy = new IgArchiveFile(target, GameVersion.NSX);
                     copy.SetData(file.Uncompress());
                     output.AddFile(copy);
-                    Increment(counters, "altri file copiati senza conversione");
+                    included.Add(target.ToLowerInvariant());
+                    Increment(counters, file.IsHKX() ? "havok PC copiati senza conversione (probabilmente non funzionano)" : "altri file copiati senza conversione");
                     lines.Add($"copiato senza conversione: {target}");
                 }
                 catch (Exception e)
                 {
                     Increment(counters, "errori");
                     lines.Add($"ERRORE {path}: {e.Message}");
+                }
+            }
+
+            // Everything else of the original level (its own assets with their Switch names)
+            if (baseArchive != null)
+            {
+                foreach (IgArchiveFile file in sw.ByArchive[baseArchive])
+                {
+                    // The placement files of the level come only from the PC archive
+                    string lower = file.Path.ToLowerInvariant();
+                    if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) continue;
+                    AddOriginal(file, "file del livello originale Switch aggiunti");
+                }
+            }
+
+            // Dependencies of the Switch files (e.g. the Switch textures of the Switch materials),
+            // searched in the same archive the file comes from
+            Console.WriteLine("Cerco le dipendenze dei file Switch...");
+            for (int i = 0; i < fromSwitch.Count; i++)
+            {
+                IgArchiveFile file = fromSwitch[i];
+                if (!file.IsIGZ() || file.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!sw.ArchiveOf.TryGetValue(file, out string? archive)) continue;
+
+                HashSet<string> dependencies;
+                try
+                {
+                    dependencies = RawDependencies(file.Uncompress());
+                }
+                catch (Exception e)
+                {
+                    lines.Add($"dipendenze non lette: {file.Path} ({e.Message})");
+                    continue;
+                }
+
+                Dictionary<string, List<IgArchiveFile>> names = sw.Names(archive);
+                foreach (string name in dependencies)
+                {
+                    if (!names.TryGetValue(name, out List<IgArchiveFile>? found)) continue;
+                    foreach (IgArchiveFile dependency in found)
+                    {
+                        if (included.Contains(dependency.Path.ToLowerInvariant())) continue;
+                        AddOriginal(dependency, "dipendenze Switch aggiunte");
+                        lines.Add($"dipendenza Switch: {dependency.Path} (da {file.Path})");
+                    }
                 }
             }
 
@@ -1165,13 +1431,14 @@ namespace NST
 
             output.Save(outputPath);
 
+            report.AppendLine($"file nell'archivio: {output.Files.Count}");
             foreach (var (key, count) in counters.OrderBy(e => e.Key)) report.AppendLine($"  {key}: {count}");
             report.AppendLine();
             foreach (string line in lines) report.AppendLine("  " + line);
 
             File.WriteAllText(reportPath, report.ToString());
             foreach (var (key, count) in counters.OrderBy(e => e.Key)) Console.WriteLine($"  {key}: {count}");
-            Console.WriteLine($"Archivio Switch scritto in {outputPath} (dettagli in {reportPath})");
+            Console.WriteLine($"Archivio Switch scritto in {outputPath} ({output.Files.Count} file, dettagli in {reportPath})");
             return 0;
         }
 
