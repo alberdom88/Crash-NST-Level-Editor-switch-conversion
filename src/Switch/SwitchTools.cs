@@ -1267,23 +1267,62 @@ namespace NST
         /// </summary>
         private static int RenameNamespaces(IgzFile igz, Dictionary<string, string> renamed)
         {
+            // References stored as hashes (EXID) whose name is unknown keep the hash as their name
+            var byHash = new Dictionary<string, string>();
+            foreach (var (from, to) in renamed) byHash.TryAdd(NamespaceUtils.ComputeHash(from).ToString(), to);
+
+            string? NewName(string name) => renamed.TryGetValue(name, out string? found) ? found : byHash.GetValueOrDefault(name);
+
             int count = 0;
             foreach (igObject obj in igz.Objects)
             {
                 foreach (NamedReference handle in obj.GetHandles(igz.GameVersion))
                 {
-                    if (renamed.TryGetValue(handle.namespaceName, out string? newName))
-                    {
-                        handle.SetNamespace(newName);
-                        count++;
-                    }
+                    string? newName = NewName(handle.namespaceName);
+                    if (newName == null) continue;
+                    handle.SetNamespace(newName);
+                    count++;
                 }
 
-                if (obj.Reference != null && renamed.TryGetValue(obj.Reference.namespaceName, out string? referenceName))
+                string? referenceName = obj.Reference == null ? null : NewName(obj.Reference.namespaceName);
+                if (obj.Reference != null && referenceName != null)
                 {
                     obj.Reference.SetNamespace(referenceName);
                     count++;
                 }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// The static collision links its shapes to the objects with a hash of their file name
+        /// (namespace) and object name: update the hashes of the renamed files
+        /// </summary>
+        private static int RenameCollisionKeys(IgzFile igz, Dictionary<string, string> renamed)
+        {
+            var hashes = new Dictionary<u32, u32>();
+            foreach (var (from, to) in renamed) hashes.TryAdd(NamespaceUtils.ComputeHash(from), NamespaceUtils.ComputeHash(to));
+
+            int count = 0;
+            foreach (CStaticCollisionHashInstanceIdHashTable table in igz.Objects.OfType<CStaticCollisionHashInstanceIdHashTable>())
+            {
+                var entries = table.Dict.ToList();
+                int changed = 0;
+
+                table.Dict.Clear();
+                foreach (var (key, value) in entries)
+                {
+                    u64 newKey = key;
+                    if (hashes.TryGetValue((u32)(key >> 32), out u32 newHash))
+                    {
+                        newKey = ((u64)newHash << 32) | (key & 0xFFFFFFFFUL);
+                        changed++;
+                    }
+                    table.Dict[newKey] = value;
+                }
+
+                if (changed > 0) table.RebuildDict = true;
+                count += changed;
             }
             return count;
         }
@@ -1449,6 +1488,23 @@ namespace NST
                     if (target == file.Path) continue;
                     renamedNamespaces[NamespaceUtils.GetFileName(file.Path, false)] = NamespaceUtils.GetFileName(target, false);
                 }
+
+                // The level must not use files of the level it replaces: they would get the same names
+                var newNames = new HashSet<string>(renamedNamespaces.Values, StringComparer.OrdinalIgnoreCase);
+                List<string> conflicts = pc.Files
+                    .Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase) && rename.Apply(f.Path) == f.Path && newNames.Contains(NamespaceUtils.GetFileName(f.Path, false)))
+                    .Select(f => f.Path)
+                    .ToList();
+
+                if (conflicts.Count > 0)
+                {
+                    report.AppendLine($"ERRORE: il livello usa file del livello {rename.ToName}, che avrebbero lo stesso nome dei suoi:");
+                    foreach (string conflict in conflicts) report.AppendLine("  " + conflict);
+                    report.AppendLine("Scegli un altro livello da sostituire.");
+                    File.WriteAllText(reportPath, report.ToString());
+                    Console.WriteLine($"Errore: il livello usa file di {rename.ToName} ({string.Join(", ", conflicts.Select(c => NamespaceUtils.GetFileName(c)))}): scegli un altro livello da sostituire.");
+                    return 1;
+                }
             }
 
             IgArchive output = new IgArchive(outputPath, GameVersion.NSX);
@@ -1569,6 +1625,7 @@ namespace NST
                         if (rename != null)
                         {
                             int renamedCount = RenameNamespaces(igz, renamedNamespaces);
+                            renamedCount += RenameCollisionKeys(igz, renamedNamespaces);
 
                             // Name of the static collision, stored as text in its name list
                             if (collision)
