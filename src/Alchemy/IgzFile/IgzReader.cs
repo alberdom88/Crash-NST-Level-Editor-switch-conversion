@@ -5,6 +5,7 @@ namespace Alchemy
         public const u32 SIGNATURE = 0x49475A01;
         public const u32 VERSION = 10;
         public const u32 PLATFORM = 6;
+        public const u32 PLATFORM_NSX = 2; // Nintendo Switch
 
         public u32 signature = SIGNATURE;
         public u32 version = VERSION;
@@ -13,6 +14,12 @@ namespace Alchemy
         public u32 numFixups = 0;
 
         public IgzHeader(int numFixups) => this.numFixups = (u32)numFixups;
+
+        public IgzHeader(int numFixups, GameVersion version)
+        {
+            this.numFixups = (u32)numFixups;
+            if (version == GameVersion.NSX) platform = PLATFORM_NSX;
+        }
     }
 
     /// <summary>

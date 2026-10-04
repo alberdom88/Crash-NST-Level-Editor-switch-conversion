@@ -97,7 +97,7 @@ namespace Alchemy
             }
 
             // Write header
-            IgzHeader header = new IgzHeader(_fixups.GetActiveCount());
+            IgzHeader header = new IgzHeader(_fixups.GetActiveCount(), GameVersion);
             writer.Seek(0, SeekOrigin.Begin);
             writer.WriteStruct(header);
 

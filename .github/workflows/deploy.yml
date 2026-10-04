@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository_owner == 'kishimisu'
     runs-on: ubuntu-latest
 
     steps:
@@ -44,6 +45,7 @@ jobs:
           path: docs
 
   deploy:
+    if: github.repository_owner == 'kishimisu'
     needs: build
     runs-on: ubuntu-latest
 

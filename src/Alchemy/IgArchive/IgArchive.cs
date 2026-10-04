@@ -4,7 +4,8 @@ namespace Alchemy
     {
         None = 0,
         NST = 1,
-        CTR = 2
+        CTR = 2,
+        NSX = 4 // Crash NST on Nintendo Switch
     }
 
     public enum FileSearchType 
@@ -536,6 +537,7 @@ namespace Alchemy
         {
             if (header.version == 11) return GameVersion.NST;
             if (header.version == 13) return GameVersion.CTR;
+            if (header.version == 12) return GameVersion.NSX;
             throw new Exception("Unknown archive version: " + header.version);
         }
 
@@ -543,6 +545,7 @@ namespace Alchemy
         {
             if (version == GameVersion.NST) return 11;
             if (version == GameVersion.CTR) return 13;
+            if (version == GameVersion.NSX) return 12;
             throw new Exception("Unknown game version: " + version);
         }
 
@@ -550,6 +553,7 @@ namespace Alchemy
         {
             if (version == GameVersion.NST) return "temporary/mack/data/win64/output/" + path;
             if (version == GameVersion.CTR) return "temporary/octane/data/ps4/output/" + path;
+            if (version == GameVersion.NSX) return "temporary/mack/data/nx/output/" + path;
             throw new Exception("Unknown game version: " + version);
         }
 
@@ -557,6 +561,7 @@ namespace Alchemy
         {
             if (version == GameVersion.NST) return 2;
             if (version == GameVersion.CTR) return 4;
+            if (version == GameVersion.NSX) return 4;
             throw new Exception("Unknown game version: " + version);
         }
     }

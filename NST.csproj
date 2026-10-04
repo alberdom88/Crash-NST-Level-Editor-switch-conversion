@@ -39,6 +39,7 @@
       <EmbeddedResource Include="assets\namespace_infos.metadata" />
       <EmbeddedResource Include="assets\L332_CollisionTemplate.pak" />
       <EmbeddedResource Include="assets\platform_data.json" />
+      <EmbeddedResource Include="assets\switch_sizes.json" />
   </ItemGroup>
 
 </Project>

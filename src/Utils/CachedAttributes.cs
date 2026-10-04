@@ -93,6 +93,7 @@ namespace Alchemy
         private readonly List<CachedFieldAttr> _fields;
         private readonly List<CachedFieldAttr> _fieldsNST;
         private readonly List<CachedFieldAttr> _fieldsCTRNF;
+        private readonly List<CachedFieldAttr> _fieldsNSX;
         private readonly Type _type;
 
         public int GetAlignment() => _attr.alignment;
@@ -112,6 +113,7 @@ namespace Alchemy
             _fields = fields;
             _fieldsNST = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.NST)).ToList();
             _fieldsCTRNF = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.CTR)).ToList();
+            _fieldsNSX = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.NSX)).ToList();
 
             // Propagate refCounted property for classes extending igHashTable
             if (type.BaseType?.IsGenericType == true && type.BaseType.GetGenericTypeDefinition() == typeof(igHashTable<,>))
@@ -133,6 +135,11 @@ namespace Alchemy
                 return _fieldsCTRNF;
             }
 
+            if (version == GameVersion.NSX)
+            {
+                return _fieldsNSX;
+            }
+
             return _fields;
         }
 
@@ -146,6 +153,14 @@ namespace Alchemy
             if (version == GameVersion.CTR && _attr.size_ctr != null)
             {
                 return _attr.size_ctr.Value;
+            }
+
+            if (version == GameVersion.NSX)
+            {
+                // Switch layout computed from the PC layout (see SwitchLayout)
+                int? switchSize = SwitchLayout.GetSize(_type);
+                if (switchSize != null) return switchSize.Value;
+                if (_attr.size_nst != null) return _attr.size_nst.Value;
             }
 
             Console.WriteLine($"[Warning] Object size not defined for {_type} ({version})");
@@ -163,6 +178,7 @@ namespace Alchemy
 
         private readonly FieldInfo _info;
         private readonly FieldAttr _attr;
+        private readonly Type? _ownerType; // Object type this field belongs to (for the Switch layout)
 
         public int GetBitFieldSize() => _attr.bitfieldSize;
         public bool RefCounted() => _attr.refCounted;
@@ -175,12 +191,15 @@ namespace Alchemy
         public object? GetValue(object obj) => _info.GetValue(obj);
         public void SetValue(object obj, object? value) => _info.SetValue(obj, value);
 
-        public CachedFieldAttr(FieldInfo info)
+        public FieldInfo GetFieldInfo() => _info;
+
+        public CachedFieldAttr(FieldInfo info, Type? ownerType = null)
         {
             _info = info;
             _attr = info.GetCustomAttribute<FieldAttr>(false)!;
+            _ownerType = ownerType;
 
-            if (_attr.offset_nst != null) GameVersions |= GameVersion.NST;
+            if (_attr.offset_nst != null) GameVersions |= GameVersion.NST | GameVersion.NSX;
             if (_attr.offset_ctr != null) GameVersions |= GameVersion.CTR;
             if (GameVersions == GameVersion.None) throw new Exception(GetName());
         }
@@ -195,6 +214,12 @@ namespace Alchemy
             if (version == GameVersion.CTR && _attr.offset_ctr != null)
             {
                 return _attr.offset_ctr.Value;
+            }
+
+            if (version == GameVersion.NSX && _attr.offset_nst != null)
+            {
+                // Switch offset computed from the PC layout (see SwitchLayout)
+                return SwitchLayout.GetOffset(_ownerType ?? _info.DeclaringType!, _info, _attr.offset_nst.Value);
             }
 
             throw new Exception($"Field offset not defined ({version})");

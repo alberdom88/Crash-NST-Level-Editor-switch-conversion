@@ -78,7 +78,7 @@ namespace Alchemy
         private static CachedObjectAttr AddCachedObject(Type type)
         {
             List<CachedFieldAttr> fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance)
-                .Select(field => new CachedFieldAttr(field))
+                .Select(field => new CachedFieldAttr(field, type))
                 .ToList();
 
             fields = ReorderFields(fields, type);

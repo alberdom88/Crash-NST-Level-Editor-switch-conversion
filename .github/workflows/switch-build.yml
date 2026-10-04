@@ -1,0 +1,36 @@
+name: Build (Switch tools)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish
+        run: dotnet publish NST.csproj -c Release -r win-x64 --self-contained true -p:OutputType=Exe -o out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NST-Switch-win-x64
+          path: out
+
+      - name: Switch layout check
+        shell: cmd
+        run: |
+          out\NST.exe --switch layout switch_layout.txt
+          type switch_layout.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: switch_layout
+          path: switch_layout.txt
+          if-no-files-found: ignore

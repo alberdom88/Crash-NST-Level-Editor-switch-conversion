@@ -6,6 +6,13 @@ class Program
     [STAThread]
     static void Main(string[] args)
     {
+        // Command line tools for the Nintendo Switch version (see src/Switch/SwitchTools.cs)
+        if (args.Length > 0 && args[0] == "--switch")
+        {
+            Environment.Exit(NST.SwitchTools.Run(args.Skip(1).ToArray()));
+            return;
+        }
+
         // Exception handling
         AppDomain.CurrentDomain.UnhandledException += NST.CrashHandler.CreateExceptionHandler();
 
