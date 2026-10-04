@@ -15,7 +15,7 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Publish
-        run: dotnet publish NST.csproj -c Release -r win-x64 --self-contained true -p:OutputType=Exe -o out
+        run: dotnet publish NST.csproj -c Release -r win-x64 --self-contained true -p:SwitchConsole=true -o out
 
       - uses: actions/upload-artifact@v4
         with:

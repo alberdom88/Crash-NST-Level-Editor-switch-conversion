@@ -13,7 +13,8 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <OutputType>WinExe</OutputType>
+    <!-- SwitchConsole=true keeps the console (needed by the command line tools, see README_SWITCH.md) -->
+    <OutputType Condition="'$(SwitchConsole)' != 'true'">WinExe</OutputType>
     <DebugType>embedded</DebugType>
     <PathMap>$(MSBuildProjectDirectory)=./</PathMap>
   </PropertyGroup>
