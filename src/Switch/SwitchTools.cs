@@ -370,7 +370,9 @@ namespace NST
                     }
                 }
 
-                if (outside) coverage.WithOutside++;
+                // Dynamic objects (VSC data...) store their own fields after the base object
+                bool dynamicType = SwitchLayout.TypeName(objectType) != typeName;
+                if (outside && !dynamicType) coverage.WithOutside++;
 
                 bool uncovered = false;
                 for (int i = 0; i < realSize && offset + i < data.Length; i++)
@@ -1145,6 +1147,32 @@ namespace NST
             foreach (IgArchiveFile file in input.Files)
             {
                 string lower = file.Path.ToLowerInvariant();
+
+                // Havok files of the level (static collision)
+                if (file.IsHKX() && mode != "nessuno" && (lower.Contains("staticcollision") || mode == "tutti"))
+                {
+                    try
+                    {
+                        byte[] original = file.Uncompress();
+                        byte[] data = new Havok.HavokFile(original, input.GameVersion).Save();
+
+                        IgArchiveFile copy = file.Clone();
+                        copy.SetData(data);
+                        output.AddFile(copy);
+
+                        bool same = data.AsSpan().SequenceEqual(original);
+                        Increment(counters, same ? "havok riscritti identici all'originale" : "havok riscritti diversi");
+                        if (!same) lines.Add($"havok diverso: {file.Path} ({original.Length} -> {data.Length} byte, primo byte diverso 0x{FirstDifference(original, data):X})");
+                    }
+                    catch (Exception e)
+                    {
+                        output.AddFile(file.Clone());
+                        Increment(counters, "havok non riscrivibili (copiati)");
+                        lines.Add($"ERRORE havok {file.Path}: {e.GetType().Name}: {e.Message}");
+                    }
+                    continue;
+                }
+
                 bool rewrite = file.IsIGZ() && (
                     (mode == "maps" && (lower.StartsWith("maps/") || lower.StartsWith("packages/"))) ||
                     (mode == "tutti" && !lower.StartsWith("textures/")));
@@ -1207,6 +1235,55 @@ namespace NST
             return length;
         }
 
+        // ------------------------------------------------------------------ havok
+
+        /// <summary>
+        /// Convert a Havok file to the Switch layout (same as CTR: reusePaddingOptimization)
+        /// </summary>
+        private static byte[] HavokToSwitch(byte[] data, GameVersion from)
+        {
+            var hkx = new Havok.HavokFile(data, from);
+            hkx.GameVersion = GameVersion.NSX;
+            hkx.GetHeader().reusePaddingOptimization = 1;
+            return hkx.Save();
+        }
+
+        /// <summary>
+        /// Read and rewrite a Switch Havok file: tells if the Switch layout is right
+        /// </summary>
+        private static string HavokRoundTrip(byte[] original)
+        {
+            byte[] data = new Havok.HavokFile(original, GameVersion.NSX).Save();
+            if (data.AsSpan().SequenceEqual(original)) return "identico all'originale";
+            return $"diverso ({original.Length} -> {data.Length} byte, primo byte diverso 0x{FirstDifference(original, data):X})";
+        }
+
+        /// <summary>
+        /// Rename the namespaces referenced by the handles and external objects of a file
+        /// </summary>
+        private static int RenameNamespaces(IgzFile igz, Dictionary<string, string> renamed)
+        {
+            int count = 0;
+            foreach (igObject obj in igz.Objects)
+            {
+                foreach (NamedReference handle in obj.GetHandles(igz.GameVersion))
+                {
+                    if (renamed.TryGetValue(handle.namespaceName, out string? newName))
+                    {
+                        handle.SetNamespace(newName);
+                        count++;
+                    }
+                }
+
+                if (obj.Reference != null && renamed.TryGetValue(obj.Reference.namespaceName, out string? referenceName))
+                {
+                    obj.Reference.SetNamespace(referenceName);
+                    count++;
+                }
+            }
+            return count;
+        }
+
         // ------------------------------------------------------------------ converti
 
         /// <summary>
@@ -1261,6 +1338,18 @@ namespace NST
             report.AppendLine(baseArchive != null ? $"archivio Switch di partenza: {baseArchive}.pak" : "archivio Switch di partenza: nessuno");
             report.AppendLine();
 
+            // Namespaces renamed with the level (package and collision files)
+            var renamedNamespaces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (rename != null)
+            {
+                foreach (IgArchiveFile file in pc.Files)
+                {
+                    string target = ReplaceIgnoreCase(file.Path, rename.Value.from, rename.Value.to);
+                    if (target == file.Path) continue;
+                    renamedNamespaces[NamespaceUtils.GetFileName(file.Path, false)] = NamespaceUtils.GetFileName(target, false);
+                }
+            }
+
             IgArchive output = new IgArchive(outputPath, GameVersion.NSX);
             var included = new HashSet<string>();
             var fromSwitch = new List<IgArchiveFile>();
@@ -1309,9 +1398,44 @@ namespace NST
                     if (original != null)
                     {
                         if (unmodified == true) { AddOriginal(original, "non modificati: presi dagli originali Switch"); continue; }
-                        if (collision) { AddOriginal(original, "collisioni prese dagli originali Switch"); lines.Add($"collisione originale Switch (eventuali modifiche PC perse): {target}"); continue; }
-                        if (!file.IsIGZ()) { AddOriginal(original, "file non igz presi dagli originali Switch"); continue; }
-                        if (unmodified == null && !levelContent) { AddOriginal(original, "asset presi dagli originali Switch"); continue; }
+                        if (!file.IsIGZ() && !(collision && file.IsHKX())) { AddOriginal(original, "file non igz presi dagli originali Switch"); continue; }
+                        if (unmodified == null && !levelContent && !collision) { AddOriginal(original, "asset presi dagli originali Switch"); continue; }
+                    }
+
+                    // Havok file (static collision of the level): converted to the Switch layout
+                    if (file.IsHKX())
+                    {
+                        try
+                        {
+                            if (original != null)
+                            {
+                                lines.Add($"prova: collisione originale Switch riletta e riscritta: {HavokRoundTrip(original.Uncompress())}");
+                            }
+
+                            IgArchiveFile hkx = new IgArchiveFile(target, GameVersion.NSX);
+                            hkx.SetData(HavokToSwitch(file.Uncompress(), file.GameVersion));
+                            output.AddFile(hkx);
+                            included.Add(target.ToLowerInvariant());
+                            Increment(counters, "havok convertiti");
+                            lines.Add($"havok convertito: {path} -> {target}");
+                        }
+                        catch (Exception e)
+                        {
+                            if (original != null)
+                            {
+                                AddOriginal(original, "havok non convertibili: presi dagli originali Switch");
+                            }
+                            else
+                            {
+                                IgArchiveFile raw = new IgArchiveFile(target, GameVersion.NSX);
+                                raw.SetData(file.Uncompress());
+                                output.AddFile(raw);
+                                included.Add(target.ToLowerInvariant());
+                                Increment(counters, "havok non convertibili copiati dal PC");
+                            }
+                            lines.Add($"ERRORE conversione havok {path}: {e.GetType().Name}: {e.Message}");
+                        }
+                        continue;
                     }
 
                     if (file.IsIGZ())
@@ -1340,6 +1464,24 @@ namespace NST
 
                         igz.GameVersion = GameVersion.NSX;
                         string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
+
+                        if (rename != null)
+                        {
+                            int renamedCount = RenameNamespaces(igz, renamedNamespaces);
+
+                            // Names stored as text (e.g. the name list of the static collision)
+                            foreach (igNameList list in igz.Objects.OfType<igNameList>())
+                            {
+                                foreach (igNameMetaField entry in list._data)
+                                {
+                                    if (entry._name == null || !entry._name.Contains(rename.Value.from, StringComparison.OrdinalIgnoreCase)) continue;
+                                    entry._name = ReplaceIgnoreCase(entry._name, rename.Value.from, rename.Value.to);
+                                    renamedCount++;
+                                }
+                            }
+
+                            if (renamedCount > 0) lines.Add($"riferimenti al livello rinominati: {renamedCount} in {target}");
+                        }
 
                         IgArchiveFile converted = new IgArchiveFile(target, GameVersion.NSX);
                         converted.SetData(igz.Save(newNamespace));

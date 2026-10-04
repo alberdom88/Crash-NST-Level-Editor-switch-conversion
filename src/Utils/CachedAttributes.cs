@@ -136,6 +136,9 @@ namespace Alchemy
 
             if (version == GameVersion.NSX)
             {
+                // Havok objects: the Switch files use the same layout as CTR (reusePaddingOptimization)
+                if (_type.IsAssignableTo(typeof(Havok.hkObject))) return _fieldsCTRNF;
+
                 // Fields that only exist on PC are removed (see SwitchLayout)
                 return _fieldsNSX ??= _fields
                     .Where(f => f.GameVersions.HasFlag(GameVersion.NSX) && !SwitchLayout.IsRemoved(f.GetFieldInfo()))
@@ -159,6 +162,9 @@ namespace Alchemy
 
             if (version == GameVersion.NSX)
             {
+                // Havok objects: same layout as CTR
+                if (_type.IsAssignableTo(typeof(Havok.hkObject)) && _attr.size_ctr != null) return _attr.size_ctr.Value;
+
                 // Switch layout computed from the PC layout (see SwitchLayout)
                 int? switchSize = SwitchLayout.GetSize(_type);
                 if (switchSize != null) return switchSize.Value;
@@ -215,6 +221,12 @@ namespace Alchemy
 
             if (version == GameVersion.CTR && _attr.offset_ctr != null)
             {
+                return _attr.offset_ctr.Value;
+            }
+
+            if (version == GameVersion.NSX && _attr.offset_ctr != null && (_ownerType ?? _info.DeclaringType)?.IsAssignableTo(typeof(Havok.hkObject)) == true)
+            {
+                // Havok objects: same layout as CTR
                 return _attr.offset_ctr.Value;
             }
 

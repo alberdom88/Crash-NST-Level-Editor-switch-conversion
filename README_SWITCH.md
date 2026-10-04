@@ -46,8 +46,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
   originale PC di un livello (stessi contenuti della Switch) le differenze che restano
   sono solo quelle di piattaforma.
 - `riscrivi`: riscrive un archivio Switch originale con l'editor, per provare in gioco
-  la scrittura degli archivi (`--igz nessuno`) e degli igz (`maps`: file del livello,
-  `tutti`: tutti tranne le texture). Il rapporto dice quanti igz riscritti sono
+  la scrittura degli archivi (`--igz nessuno`) e degli igz (`maps`: file del livello e
+  collisione statica, `tutti`: tutti tranne le texture, compresi i file Havok). Il rapporto dice quanti igz riscritti sono
   identici byte per byte all'originale.
 - `converti` (sperimentale): crea un archivio Switch partendo dall'archivio Switch del
   livello originale. I file di posizionamento del livello (`maps/`) vengono convertiti
@@ -57,8 +57,9 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
     PC vengono presi dagli originali Switch.
   - `--come-originale`: il livello creato dall'editor (`..._Custom`) riprende il nome
     del livello originale, cosi' l'archivio puo' sostituirlo.
-  Le collisioni Havok e la grafica non vengono ancora convertite (si usano quelle
-  originali Switch quando esistono).
+  La collisione statica del livello (Havok) viene convertita: i file Havok della Switch
+  usano la stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor
+  conosce gia'. La grafica non viene convertita: si usano gli originali Switch.
 
 La build per Windows la produce GitHub Actions (`.github/workflows/switch-build.yml`):
 artifact `NST-Switch-win-x64`. Il log della build e il rapporto `layout` vengono
