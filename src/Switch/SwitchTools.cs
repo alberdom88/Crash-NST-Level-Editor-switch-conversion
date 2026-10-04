@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Reflection;
 using System.Text;
 using Alchemy;
 
@@ -7,8 +8,13 @@ namespace NST
     /// <summary>
     /// Command line tools for the Nintendo Switch version of Crash NST.
     ///
-    ///   NST.exe --switch layout   [report.txt]
-    ///       Compares the computed Switch object sizes with the real ones (assets/switch_sizes.json).
+    ///   NST.exe --switch layout [report.txt]
+    ///       Compares the computed Switch object sizes with the real ones (assets/switch_sizes.json)
+    ///       and lists the fields that only exist on PC.
+    ///
+    ///   NST.exe --switch struttura &lt;switch_dump_folder&gt; [report.txt] [--pak name] [--max N]
+    ///       Reads the Switch game files with the computed layout and lists the object bytes that
+    ///       are not covered by any known field (missing or misplaced fields).
     ///
     ///   NST.exe --switch verifica &lt;pc.pak&gt; &lt;switch_dump_folder&gt; [report.txt] [--max N]
     ///       For every .igz of the PC archive that also exists in the Switch game, reads the PC file
@@ -16,8 +22,10 @@ namespace NST
     ///       all the values. Also rewrites the PC file with the Switch layout and reads it back.
     ///
     ///   NST.exe --switch converti &lt;pc.pak&gt; &lt;switch_dump_folder&gt; &lt;output.pak&gt; [report.txt]
-    ///       Builds a Switch archive: shared assets are taken from the Switch game, the files of
-    ///       the level are converted from the PC version.
+    ///           [--come-originale] [--pc-originali &lt;pc_archives_folder&gt;]
+    ///       Builds a Switch archive: unmodified assets are taken from the Switch game, the files of
+    ///       the level are converted from the PC version. --come-originale gives the level back the
+    ///       name of the original level, so that the archive can replace it.
     /// </summary>
     public static class SwitchTools
     {
@@ -31,6 +39,14 @@ namespace NST
             "igGraphicsMaterial", "igModelData", "igModelDrawCallData", "igGraphicsObjectSet",
         ];
 
+        private class Options
+        {
+            public int Max = int.MaxValue;
+            public string? PakFilter;
+            public string? PcOriginals;
+            public bool RenameBack;
+        }
+
         public static int Run(string[] args)
         {
             if (args.Length == 0)
@@ -42,26 +58,22 @@ namespace NST
             try
             {
                 string command = args[0].ToLowerInvariant();
-                List<string> rest = args.Skip(1).ToList();
-
-                int max = int.MaxValue;
-                int maxIndex = rest.IndexOf("--max");
-                if (maxIndex != -1 && maxIndex + 1 < rest.Count)
-                {
-                    max = int.Parse(rest[maxIndex + 1]);
-                    rest.RemoveRange(maxIndex, 2);
-                }
+                List<string> rest = args.Skip(1).Select(CleanPath).ToList();
+                Options options = ParseOptions(rest);
 
                 switch (command)
                 {
                     case "layout":
-                        return Layout(rest.Count > 0 ? rest[0] : "switch_layout.txt");
+                        return LayoutReport(rest.Count > 0 ? rest[0] : "switch_layout.txt");
+                    case "struttura":
+                        if (rest.Count < 1) break;
+                        return Structure(rest[0], rest.Count > 1 ? rest[1] : "switch_struttura.txt", options);
                     case "verifica":
                         if (rest.Count < 2) break;
-                        return Verify(rest[0], rest[1], rest.Count > 2 ? rest[2] : "switch_verifica.txt", max);
+                        return Verify(rest[0], rest[1], rest.Count > 2 ? rest[2] : "switch_verifica.txt", options.Max);
                     case "converti":
                         if (rest.Count < 3) break;
-                        return Convert(rest[0], rest[1], rest[2], rest.Count > 3 ? rest[3] : "switch_converti.txt");
+                        return Convert(rest[0], rest[1], rest[2], rest.Count > 3 ? rest[3] : "switch_converti.txt", options);
                 }
 
                 PrintUsage();
@@ -74,29 +86,71 @@ namespace NST
             }
         }
 
+        private static string CleanPath(string value) => value.Trim().Trim('"');
+
+        private static Options ParseOptions(List<string> rest)
+        {
+            var options = new Options();
+            int i = 0;
+            while (i < rest.Count)
+            {
+                string name = rest[i].ToLowerInvariant();
+                bool hasValue = i + 1 < rest.Count;
+
+                if (name == "--max" && hasValue) { options.Max = int.Parse(rest[i + 1]); rest.RemoveRange(i, 2); }
+                else if (name == "--pak" && hasValue) { options.PakFilter = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--pc-originali" && hasValue) { options.PcOriginals = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--come-originale") { options.RenameBack = true; rest.RemoveAt(i); }
+                else i++;
+            }
+            return options;
+        }
+
         private static void PrintUsage()
         {
             Console.WriteLine("Uso:");
             Console.WriteLine("  NST.exe --switch layout [report.txt]");
+            Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale] [--pc-originali <cartella_archives_pc>]");
+        }
+
+        private static void Increment(Dictionary<string, int> counters, string key)
+        {
+            counters[key] = counters.GetValueOrDefault(key) + 1;
+        }
+
+        private static bool IsIgnoredField(CachedFieldAttr field)
+        {
+            return _ignoredFields.Contains(field.GetName()) || SwitchLayout.IsRemoved(field.GetFieldInfo());
+        }
+
+        /// <summary>
+        /// Size of a field in the Switch layout (the reference count of igObject is 32-bit)
+        /// </summary>
+        private static int FieldBytes(CachedFieldAttr field, Type owner)
+        {
+            FieldInfo info = field.GetFieldInfo();
+            if (info.DeclaringType == typeof(igObject) && info.Name == "__referenceCount") return 4;
+            return Math.Max(SwitchLayout.FieldSize(info, owner), 0);
         }
 
         // ------------------------------------------------------------------ layout
 
-        private static int Layout(string reportPath)
+        private static int LayoutReport(string reportPath)
         {
             var report = new StringBuilder();
-            int known = SwitchLayout.KnownSizeCount();
-            report.AppendLine($"Dimensioni Switch note: {known}");
+            IReadOnlyDictionary<string, int> known = SwitchLayout.KnownSizes();
+            report.AppendLine($"Dimensioni Switch note: {known.Count}");
 
             var counts = new Dictionary<string, int>();
             var wrong = new List<string>();
+            var ranges = new List<string>();
             int missing = 0;
 
-            foreach (string typeName in KnownTypeNames())
+            foreach (string typeName in known.Keys.OrderBy(k => k))
             {
-                Type? type = FindType(typeName);
+                Type? type = SwitchLayout.FindType(typeName);
                 if (type == null) { missing++; continue; }
 
                 SwitchLayout.Layout? layout = SwitchLayout.Get(type);
@@ -112,7 +166,18 @@ namespace NST
 
                 if (!layout.MatchesKnownSize)
                 {
-                    wrong.Add($"{typeName}: calcolata {layout.Size}, reale {layout.KnownSize} ({layout.Source})");
+                    string padded = layout.Padded ? ", completata con byte vuoti" : "";
+                    wrong.Add($"{typeName}: calcolata {layout.ComputedSize}, reale {layout.KnownSize} ({layout.Source}{padded})");
+                }
+
+                try
+                {
+                    string? problem = CheckFieldRanges(type, layout.Size);
+                    if (problem != null) ranges.Add($"{typeName}: {problem}");
+                }
+                catch (Exception e)
+                {
+                    ranges.Add($"{typeName}: errore {e.Message}");
                 }
             }
 
@@ -121,9 +186,24 @@ namespace NST
             {
                 report.AppendLine($"  {count,6}  {key}");
             }
+
+            List<string> removed = SwitchLayout.GetRemovalLog();
+            report.AppendLine();
+            report.AppendLine($"=== CAMPI SOLO PC (tolti nella versione Switch): {removed.Count} gruppi ===");
+            foreach (string line in removed) report.AppendLine("  " + line);
+
             report.AppendLine();
             report.AppendLine($"=== TIPI CON DIMENSIONE SBAGLIATA ({wrong.Count}) ===");
             foreach (string line in wrong) report.AppendLine("  " + line);
+
+            report.AppendLine();
+            report.AppendLine($"=== CAMPI SOVRAPPOSTI O FUORI DALL'OGGETTO ({ranges.Count}) ===");
+            foreach (string line in ranges.Take(300)) report.AppendLine("  " + line);
+
+            List<string> messages = SwitchLayout.GetMessages();
+            report.AppendLine();
+            report.AppendLine($"=== MESSAGGI ({messages.Count}) ===");
+            foreach (string line in messages.Take(200)) report.AppendLine("  " + line);
 
             File.WriteAllText(reportPath, report.ToString());
             Console.WriteLine(report.ToString());
@@ -131,12 +211,249 @@ namespace NST
             return 0;
         }
 
-        private static IEnumerable<string> KnownTypeNames()
+        /// <summary>
+        /// Check that the Switch fields of a type don't overlap and fit in the object
+        /// </summary>
+        private static string? CheckFieldRanges(Type type, int size)
         {
-            using Stream? stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("NST.assets.switch_sizes.json");
-            if (stream == null) return [];
-            var sizes = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(stream);
-            return sizes?.Keys.OrderBy(k => k).ToList() ?? [];
+            var fields = new List<(string name, int start, int end)>();
+            foreach (CachedFieldAttr field in AttributeUtils.GetAttributes(type).GetFields(GameVersion.NSX))
+            {
+                int length = FieldBytes(field, type);
+                if (length <= 0) continue;
+                int start = field.GetOffset(GameVersion.NSX);
+                fields.Add((field.GetName(), start, start + length));
+            }
+
+            fields.Sort((a, b) => a.start.CompareTo(b.start));
+
+            for (int i = 0; i < fields.Count; i++)
+            {
+                if (fields[i].end > size) return $"{fields[i].name} [{fields[i].start}-{fields[i].end}) oltre la dimensione {size}";
+                if (i > 0 && fields[i].start < fields[i - 1].end) return $"{fields[i - 1].name} [{fields[i - 1].start}-{fields[i - 1].end}) sovrapposto a {fields[i].name} [{fields[i].start}-{fields[i].end})";
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------ struttura
+
+        private class Coverage
+        {
+            public string EditorType = "";
+            public int RealSize;
+            public int ComputedSize;
+            public int Objects;
+            public int WithUncovered;
+            public int WithOutside;
+            public string? Example;
+            public Dictionary<int, int> UncoveredOffsets = [];
+        }
+
+        private static IEnumerable<string> PakFiles(string folder)
+        {
+            if (File.Exists(folder)) return [folder];
+            return Directory.EnumerateFiles(folder, "*.pak", SearchOption.AllDirectories).OrderBy(p => p);
+        }
+
+        private static int Structure(string switchDir, string reportPath, Options options)
+        {
+            FieldInfo? objectsField = typeof(IgzReader).GetField("_objects", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (objectsField == null)
+            {
+                Console.WriteLine("Errore: IgzReader._objects non trovato");
+                return 2;
+            }
+
+            var types = new Dictionary<string, Coverage>();
+            var counters = new Dictionary<string, int>();
+            var errors = new List<string>();
+            var seen = new HashSet<string>();
+            int done = 0;
+
+            Console.WriteLine("Leggo i file della Switch...");
+
+            foreach (string pakPath in PakFiles(switchDir))
+            {
+                if (options.PakFilter != null && !Path.GetFileName(pakPath).Contains(options.PakFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                if (done >= options.Max) break;
+
+                IgArchive archive;
+                try
+                {
+                    archive = IgArchive.Open(pakPath);
+                }
+                catch (Exception e)
+                {
+                    errors.Add($"Archivio {Path.GetFileName(pakPath)}: {e.Message}");
+                    continue;
+                }
+
+                Increment(counters, "archivi");
+
+                foreach (IgArchiveFile file in archive.Files)
+                {
+                    if (!file.IsIGZ() || !seen.Add(file.Path.ToLowerInvariant())) continue;
+                    if (done >= options.Max) break;
+
+                    done++;
+                    if (done % 250 == 0) Console.WriteLine($"  {done} file...");
+
+                    try
+                    {
+                        CheckCoverage(file.Path, file.Uncompress(), objectsField, types);
+                        Increment(counters, "igz letti");
+                    }
+                    catch (Exception e)
+                    {
+                        if (errors.Count < 1000) errors.Add($"{file.Path}: {e.GetType().Name}: {e.Message}");
+                        Increment(counters, "igz con errori di lettura");
+                    }
+                }
+            }
+
+            WriteStructureReport(reportPath, switchDir, counters, types, errors);
+            return 0;
+        }
+
+        private static void CheckCoverage(string path, byte[] data, FieldInfo objectsField, Dictionary<string, Coverage> types)
+        {
+            var reader = new IgzReader(new MemoryStream(data), GameVersion.NSX);
+            var objects = (Dictionary<int, igObject>)objectsField.GetValue(reader)!;
+            List<(string, int)> typeSizes = ReadTypeSizes(data);
+
+            foreach ((int offset, igObject obj) in objects)
+            {
+                if (offset < 0 || offset + 4 > data.Length) continue;
+
+                int typeIndex = BitConverter.ToInt32(data, offset);
+                if (typeIndex < 0 || typeIndex >= typeSizes.Count) continue;
+
+                var (typeName, realSize) = typeSizes[typeIndex];
+                if (realSize <= 0) continue;
+
+                Type objectType = obj.GetType();
+                if (!types.TryGetValue(typeName, out Coverage? coverage))
+                {
+                    coverage = new Coverage
+                    {
+                        EditorType = objectType.Name,
+                        RealSize = realSize,
+                        ComputedSize = AttributeUtils.GetObjectSize(objectType, GameVersion.NSX),
+                    };
+                    types[typeName] = coverage;
+                }
+
+                coverage.Objects++;
+
+                bool[] covered = new bool[realSize];
+                bool outside = false;
+
+                foreach (CachedFieldAttr field in AttributeUtils.GetAttributes(objectType).GetFields(GameVersion.NSX))
+                {
+                    int start = field.GetOffset(GameVersion.NSX);
+                    int length = FieldBytes(field, objectType);
+
+                    for (int i = start; i < start + length; i++)
+                    {
+                        if (i < 0 || i >= realSize) { outside = true; break; }
+                        covered[i] = true;
+                    }
+                }
+
+                if (outside) coverage.WithOutside++;
+
+                bool uncovered = false;
+                for (int i = 0; i < realSize && offset + i < data.Length; i++)
+                {
+                    if (covered[i] || data[offset + i] == 0) continue;
+                    uncovered = true;
+                    coverage.UncoveredOffsets[i] = coverage.UncoveredOffsets.GetValueOrDefault(i) + 1;
+                }
+
+                if (uncovered)
+                {
+                    coverage.WithUncovered++;
+                    coverage.Example ??= $"{path} @0x{offset:X}";
+                }
+            }
+        }
+
+        /// <summary>
+        /// Group consecutive offsets: "0x10-0x13 (x25)"
+        /// </summary>
+        private static string FormatRanges(Dictionary<int, int> offsets, int maxRanges)
+        {
+            var groups = new List<(int start, int end, int count)>();
+            foreach (int offset in offsets.Keys.OrderBy(o => o))
+            {
+                int count = offsets[offset];
+                if (groups.Count > 0 && groups[^1].end == offset - 1)
+                {
+                    var last = groups[^1];
+                    groups[^1] = (last.start, offset, Math.Max(last.count, count));
+                }
+                else
+                {
+                    groups.Add((offset, offset, count));
+                }
+            }
+
+            return string.Join(", ", groups
+                .OrderByDescending(g => g.count)
+                .Take(maxRanges)
+                .OrderBy(g => g.start)
+                .Select(g => g.start == g.end ? $"{g.start} (x{g.count})" : $"{g.start}-{g.end} (x{g.count})"));
+        }
+
+        private static void WriteStructureReport(string reportPath, string switchDir, Dictionary<string, int> counters, Dictionary<string, Coverage> types, List<string> errors)
+        {
+            var report = new StringBuilder();
+            report.AppendLine("STRUTTURA DEGLI OGGETTI SWITCH (byte non coperti dai campi conosciuti)");
+            report.AppendLine($"dump Switch: {switchDir}");
+            report.AppendLine();
+
+            foreach (var (key, count) in counters.OrderBy(e => e.Key)) report.AppendLine($"  {key}: {count}");
+
+            int objects = types.Values.Sum(t => t.Objects);
+            var withData = types.Where(e => e.Value.WithUncovered > 0).OrderByDescending(e => e.Value.WithUncovered).ToList();
+            var outside = types.Where(e => e.Value.WithOutside > 0).OrderByDescending(e => e.Value.WithOutside).ToList();
+            var sizes = types.Where(e => e.Value.ComputedSize != e.Value.RealSize).OrderBy(e => e.Key).ToList();
+
+            report.AppendLine();
+            report.AppendLine($"tipi: {types.Count}, oggetti: {objects}");
+            report.AppendLine($"tipi completamente coperti: {types.Count - withData.Count}");
+            report.AppendLine($"tipi con byte non coperti: {withData.Count} (oggetti: {withData.Sum(e => e.Value.WithUncovered)})");
+            report.AppendLine($"tipi con campi fuori dall'oggetto: {outside.Count}");
+            report.AppendLine($"tipi con dimensione calcolata diversa: {sizes.Count}");
+
+            report.AppendLine();
+            report.AppendLine("=== TIPI CON BYTE NON COPERTI (tipo [classe editor] dimensione: oggetti con byte non coperti / oggetti, posizioni) ===");
+            foreach (var (name, coverage) in withData.Take(600))
+            {
+                string editor = coverage.EditorType == name ? "" : $" [{coverage.EditorType}]";
+                report.AppendLine($"  {name}{editor} {coverage.RealSize}: {coverage.WithUncovered}/{coverage.Objects}, byte {FormatRanges(coverage.UncoveredOffsets, 6)}   es. {coverage.Example}");
+            }
+
+            report.AppendLine();
+            report.AppendLine("=== TIPI CON CAMPI FUORI DALL'OGGETTO ===");
+            foreach (var (name, coverage) in outside.Take(300))
+            {
+                report.AppendLine($"  {name}: {coverage.WithOutside}/{coverage.Objects} (dimensione reale {coverage.RealSize}, calcolata {coverage.ComputedSize})");
+            }
+
+            report.AppendLine();
+            report.AppendLine("=== TIPI CON DIMENSIONE CALCOLATA DIVERSA ===");
+            foreach (var (name, coverage) in sizes.Take(300))
+            {
+                report.AppendLine($"  {name}: calcolata {coverage.ComputedSize}, reale {coverage.RealSize} ({coverage.Objects} oggetti)");
+            }
+
+            report.AppendLine();
+            report.AppendLine($"=== ERRORI ({errors.Count}) ===");
+            foreach (string line in errors.Take(300)) report.AppendLine("  " + line);
+
+            File.WriteAllText(reportPath, report.ToString());
+            Console.WriteLine($"Tipi completamente coperti: {types.Count - withData.Count}/{types.Count}  (rapporto completo: {reportPath})");
         }
 
         // ------------------------------------------------------------------ verifica
@@ -159,7 +476,7 @@ namespace NST
             var stats = new Stats();
 
             Console.WriteLine("Indicizzo gli archivi Switch...");
-            Dictionary<string, IgArchiveFile> index = IndexSwitch(switchDir, stats);
+            Dictionary<string, IgArchiveFile> index = IndexArchives(switchDir, stats.Errors);
             Console.WriteLine($"  {index.Count} file");
 
             IgArchive pc = IgArchive.Open(pcPath);
@@ -226,15 +543,14 @@ namespace NST
             return 0;
         }
 
-        private static Dictionary<string, IgArchiveFile> IndexSwitch(string switchDir, Stats? stats)
+        /// <summary>
+        /// All the files of the archives of a folder (or of a single archive), by lowercase path
+        /// </summary>
+        private static Dictionary<string, IgArchiveFile> IndexArchives(string folder, List<string>? errors)
         {
             var index = new Dictionary<string, IgArchiveFile>();
 
-            IEnumerable<string> paks = File.Exists(switchDir)
-                ? new string[] { switchDir }
-                : Directory.EnumerateFiles(switchDir, "*.pak", SearchOption.AllDirectories);
-
-            foreach (string pakPath in paks.OrderBy(p => p))
+            foreach (string pakPath in PakFiles(folder))
             {
                 try
                 {
@@ -246,7 +562,7 @@ namespace NST
                 }
                 catch (Exception e)
                 {
-                    stats?.Errors.Add($"Archivio Switch {Path.GetFileName(pakPath)}: {e.Message}");
+                    errors?.Add($"Archivio {Path.GetFileName(pakPath)}: {e.Message}");
                 }
             }
 
@@ -276,7 +592,8 @@ namespace NST
         }
 
         /// <summary>
-        /// A new level created from an original one (L112_RoadToNowhere_Custom from L112_RoadToNowhere)
+        /// A new level created from an original one (L112_RoadToNowhere_Custom from L112_RoadToNowhere).
+        /// Both names keep the case used in the PC archive.
         /// </summary>
         private static (string from, string to)? DetectRename(IgArchive pc, Dictionary<string, IgArchiveFile> index)
         {
@@ -293,7 +610,8 @@ namespace NST
                 .OrderByDescending(l => l.Length)
                 .FirstOrDefault();
 
-            return original == null ? null : (level, original);
+            if (original == null) return null;
+            return (level, level.Substring(0, original.Length));
         }
 
         private static IgArchiveFile? FindCounterpart(string path, Dictionary<string, IgArchiveFile> index, (string from, string to)? rename)
@@ -332,14 +650,14 @@ namespace NST
             {
                 if (stats.Sizes.ContainsKey(typeName)) continue;
 
-                Type? type = FindType(typeName);
+                Type? type = SwitchLayout.FindType(typeName);
                 int computed = type == null ? -1 : AttributeUtils.GetObjectSize(type, GameVersion.NSX);
                 stats.Sizes[typeName] = [computed, realSize];
             }
         }
 
         /// <summary>
-        /// Object types and sizes declared in an IGZ file (TMET and MTSZ fixups)
+        /// Object types and sizes declared in an IGZ file (TMET and MTSZ fixups), in TMET order
         /// </summary>
         public static List<(string, int)> ReadTypeSizes(byte[] data)
         {
@@ -388,19 +706,6 @@ namespace NST
         }
 
         /// <summary>
-        /// Find the editor class corresponding to a TMET type name
-        /// </summary>
-        private static Type? FindType(string typeName)
-        {
-            if (typeName.EndsWith("MetaField"))
-            {
-                Type? instance = Type.GetType("Alchemy." + typeName + "Instance");
-                if (instance != null) return instance;
-            }
-            return Type.GetType("Alchemy." + typeName);
-        }
-
-        /// <summary>
         /// Match the objects of two versions of the same file and compare all their values
         /// </summary>
         private static void CompareFiles(string path, IgzFile a, IgzFile b,
@@ -431,7 +736,7 @@ namespace NST
 
                 foreach (CachedFieldAttr field in AttributeUtils.GetAttributes(objA.GetType()).GetFields(GameVersion.NST))
                 {
-                    if (_ignoredFields.Contains(field.GetName())) continue;
+                    if (IsIgnoredField(field)) continue;
 
                     string key = $"{typeName}.{field.GetName()}";
                     if (!fields.TryGetValue(key, out int[]? counter))
@@ -599,7 +904,7 @@ namespace NST
                 }
                 foreach (CachedFieldAttr field in AttributeUtils.GetAttributes(ma.GetType()).GetFields(GameVersion.NST))
                 {
-                    if (_ignoredFields.Contains(field.GetName())) continue;
+                    if (IsIgnoredField(field)) continue;
                     if (!ValuesEqual(field.GetValue(ma), field.GetValue(mb), depth + 1, out string inner))
                     {
                         why = $"{field.GetName()}: {inner}";
@@ -686,7 +991,22 @@ namespace NST
 
         // ------------------------------------------------------------------ converti
 
-        private static int Convert(string pcPath, string switchDir, string outputPath, string reportPath)
+        /// <summary>
+        /// Files that belong to the level itself (placement of the objects, package, zone info)
+        /// </summary>
+        private static bool IsLevelContent(string path, List<string> levels)
+        {
+            string lower = path.ToLowerInvariant();
+            if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) return true;
+            return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
+        }
+
+        private static bool SameData(IgArchiveFile a, IgArchiveFile b)
+        {
+            return a.Uncompress().AsSpan().SequenceEqual(b.Uncompress());
+        }
+
+        private static int Convert(string pcPath, string switchDir, string outputPath, string reportPath, Options options)
         {
             var report = new StringBuilder();
             report.AppendLine("CONVERSIONE PC -> SWITCH");
@@ -694,30 +1014,68 @@ namespace NST
             report.AppendLine($"output: {outputPath}");
 
             Console.WriteLine("Indicizzo gli archivi Switch...");
-            Dictionary<string, IgArchiveFile> index = IndexSwitch(switchDir, null);
+            Dictionary<string, IgArchiveFile> index = IndexArchives(switchDir, null);
+
+            Dictionary<string, IgArchiveFile>? pcIndex = null;
+            if (options.PcOriginals != null)
+            {
+                Console.WriteLine("Indicizzo gli archivi originali PC...");
+                pcIndex = IndexArchives(options.PcOriginals, null);
+                report.AppendLine($"originali PC: {options.PcOriginals} ({pcIndex.Count} file)");
+            }
 
             IgArchive pc = IgArchive.Open(pcPath);
             List<string> levels = LevelNames(pc.Files.Select(f => f.Path));
+            (string from, string to)? rename = options.RenameBack ? DetectRename(pc, index) : null;
+
             report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
+            if (options.RenameBack)
+            {
+                report.AppendLine(rename != null
+                    ? $"il livello prende il nome dell'originale: {rename.Value.from} -> {rename.Value.to}"
+                    : "--come-originale: livello originale non trovato, nomi lasciati invariati");
+            }
             report.AppendLine();
 
             IgArchive output = new IgArchive(outputPath, GameVersion.NSX);
             var counters = new Dictionary<string, int>();
             var lines = new List<string>();
+            int done = 0;
 
             foreach (IgArchiveFile file in pc.Files)
             {
                 string path = file.Path;
-                bool levelFile = levels.Any(l => path.Contains(l, StringComparison.OrdinalIgnoreCase));
-                index.TryGetValue(path.ToLowerInvariant(), out IgArchiveFile? original);
+                done++;
+                if (done % 250 == 0) Console.WriteLine($"  {done}/{pc.Files.Count} file...");
 
                 try
                 {
-                    // Shared asset that exists in the Switch game: use the Switch version
-                    if (!levelFile && original != null)
+                    // The zone info of a new level is not needed when it replaces the original one
+                    if (rename != null && path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Increment(counters, "file update/ tolti (il livello sostituisce l'originale)");
+                        lines.Add($"tolto: {path}");
+                        continue;
+                    }
+
+                    string target = rename != null ? ReplaceIgnoreCase(path, rename.Value.from, rename.Value.to) : path;
+                    index.TryGetValue(target.ToLowerInvariant(), out IgArchiveFile? original);
+
+                    bool? unmodified = null;
+                    if (pcIndex != null && pcIndex.TryGetValue(path.ToLowerInvariant(), out IgArchiveFile? pcOriginal))
+                    {
+                        unmodified = SameData(file, pcOriginal);
+                    }
+
+                    bool levelContent = IsLevelContent(path, levels);
+                    bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
+
+                    // Unmodified file, shared asset or collision that exists in the Switch game: use the Switch version
+                    if (original != null && (unmodified == true || (unmodified == null && !levelContent) || collision))
                     {
                         output.AddFile(original.Clone());
-                        Increment(counters, "presi dagli originali Switch");
+                        Increment(counters, unmodified == true ? "non modificati: presi dagli originali Switch" : collision ? "collisioni prese dagli originali Switch" : "presi dagli originali Switch");
+                        if (collision && unmodified != true) lines.Add($"collisione originale Switch (eventuali modifiche PC perse): {target}");
                         continue;
                     }
 
@@ -731,8 +1089,8 @@ namespace NST
                             if (original != null)
                             {
                                 output.AddFile(original.Clone());
-                                Increment(counters, "grafica del livello presa dagli originali Switch");
-                                lines.Add($"grafica, originale Switch: {path}");
+                                Increment(counters, "grafica presa dagli originali Switch");
+                                lines.Add($"grafica, originale Switch: {target}");
                             }
                             else
                             {
@@ -743,33 +1101,66 @@ namespace NST
                         }
 
                         igz.GameVersion = GameVersion.NSX;
-                        IgArchiveFile converted = new IgArchiveFile(path, GameVersion.NSX);
-                        converted.SetData(igz.Save());
+                        string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
+
+                        IgArchiveFile converted = new IgArchiveFile(target, GameVersion.NSX);
+                        converted.SetData(igz.Save(newNamespace));
                         output.AddFile(converted);
-                        Increment(counters, "igz convertiti");
+
+                        Increment(counters, unmodified == false ? "igz modificati convertiti" : "igz convertiti");
+                        if (target != path) lines.Add($"rinominato: {path} -> {target}");
                         continue;
                     }
 
-                    // Other files (Havok collisions, sounds...): not converted yet
-                    if (original != null && file.IsHKX())
+                    if (file.IsHKX())
                     {
-                        output.AddFile(original.Clone());
-                        Increment(counters, "collisioni prese dagli originali Switch");
-                        lines.Add($"collisione originale Switch (modifiche PC perse): {path}");
+                        if (original != null)
+                        {
+                            output.AddFile(original.Clone());
+                            Increment(counters, "havok presi dagli originali Switch");
+                            lines.Add($"havok originale Switch (modifiche PC perse): {target}");
+                        }
+                        else
+                        {
+                            IgArchiveFile hkx = new IgArchiveFile(target, GameVersion.NSX);
+                            hkx.SetData(file.Uncompress());
+                            output.AddFile(hkx);
+                            Increment(counters, "havok PC copiati senza conversione (probabilmente non funzionano)");
+                            lines.Add($"havok PC copiato senza conversione: {target}");
+                        }
                         continue;
                     }
 
-                    IgArchiveFile copy = new IgArchiveFile(path, GameVersion.NSX);
+                    IgArchiveFile copy = new IgArchiveFile(target, GameVersion.NSX);
                     copy.SetData(file.Uncompress());
                     output.AddFile(copy);
-                    Increment(counters, file.IsHKX() ? "collisioni PC copiate senza conversione" : "altri file copiati senza conversione");
-                    lines.Add($"copiato senza conversione: {path}");
+                    Increment(counters, "altri file copiati senza conversione");
+                    lines.Add($"copiato senza conversione: {target}");
                 }
                 catch (Exception e)
                 {
                     Increment(counters, "errori");
                     lines.Add($"ERRORE {path}: {e.Message}");
                 }
+            }
+
+            // The package file must list exactly the files of the archive
+            try
+            {
+                if (output.FindPackageFile() == null)
+                {
+                    lines.Add("file del pacchetto (_pkg.igz) non trovato o non unico: non aggiornato");
+                }
+                else
+                {
+                    output.RebuildPackageFile(output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList(), out _);
+                    Increment(counters, "file del pacchetto aggiornato");
+                }
+            }
+            catch (Exception e)
+            {
+                Increment(counters, "errori");
+                lines.Add($"ERRORE aggiornando il file del pacchetto: {e.Message}");
             }
 
             output.Save(outputPath);
@@ -779,16 +1170,11 @@ namespace NST
             foreach (string line in lines) report.AppendLine("  " + line);
 
             File.WriteAllText(reportPath, report.ToString());
-            Console.WriteLine(report.ToString());
-            Console.WriteLine($"Archivio Switch scritto in {outputPath}");
+            foreach (var (key, count) in counters.OrderBy(e => e.Key)) Console.WriteLine($"  {key}: {count}");
+            Console.WriteLine($"Archivio Switch scritto in {outputPath} (dettagli in {reportPath})");
             return 0;
         }
 
         private static bool IsGraphicsType(string typeName) => _graphicsTypes.Contains(typeName) || typeName.EndsWith("Material");
-
-        private static void Increment(Dictionary<string, int> counters, string key)
-        {
-            counters[key] = counters.GetValueOrDefault(key) + 1;
-        }
     }
 }

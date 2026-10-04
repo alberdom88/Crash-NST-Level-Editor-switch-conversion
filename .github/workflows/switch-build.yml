@@ -2,7 +2,11 @@ name: Build (Switch tools)
 
 on:
   push:
+    branches-ignore: [ci-reports]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -15,7 +19,10 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Publish
-        run: dotnet publish NST.csproj -c Release -r win-x64 --self-contained true -p:SwitchConsole=true -o out
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet publish NST.csproj -c Release -r win-x64 --self-contained true -p:SwitchConsole=true -o out 2>&1 | tee build.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -25,7 +32,7 @@ jobs:
       - name: Switch layout check
         shell: cmd
         run: |
-          out\NST.exe --switch layout switch_layout.txt
+          out\NST.exe --switch layout switch_layout.txt > layout_console.log 2>&1
           type switch_layout.txt
 
       - uses: actions/upload-artifact@v4
@@ -34,3 +41,26 @@ jobs:
           name: switch_layout
           path: switch_layout.txt
           if-no-files-found: ignore
+
+      # Build log and layout report on the ci-reports branch (readable without downloading artifacts)
+      - name: Publish reports
+        if: always()
+        shell: bash
+        run: |
+          REPORTS="$(pwd)/../ci-reports-tmp"
+          rm -rf "$REPORTS"
+          mkdir -p "$REPORTS"
+          for f in build.log switch_layout.txt layout_console.log; do
+            if [ -f "$f" ]; then cp "$f" "$REPORTS/"; fi
+          done
+          if [ -f build.log ]; then grep -E "error|Error|ERROR" build.log > "$REPORTS/build_errors.txt" || true; fi
+          echo "${{ github.sha }} ${{ job.status }}" > "$REPORTS/commit.txt"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan ci-reports
+          git rm -rf --quiet . || true
+          git clean -fdxq || true
+          cp "$REPORTS"/* .
+          git add -f -A
+          git commit -m "CI reports for ${{ github.sha }}"
+          git push -f origin ci-reports

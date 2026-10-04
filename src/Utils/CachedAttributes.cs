@@ -93,7 +93,7 @@ namespace Alchemy
         private readonly List<CachedFieldAttr> _fields;
         private readonly List<CachedFieldAttr> _fieldsNST;
         private readonly List<CachedFieldAttr> _fieldsCTRNF;
-        private readonly List<CachedFieldAttr> _fieldsNSX;
+        private List<CachedFieldAttr>? _fieldsNSX; // Built on first use (see SwitchLayout)
         private readonly Type _type;
 
         public int GetAlignment() => _attr.alignment;
@@ -113,7 +113,6 @@ namespace Alchemy
             _fields = fields;
             _fieldsNST = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.NST)).ToList();
             _fieldsCTRNF = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.CTR)).ToList();
-            _fieldsNSX = _fields.Where(f => f.GameVersions.HasFlag(GameVersion.NSX)).ToList();
 
             // Propagate refCounted property for classes extending igHashTable
             if (type.BaseType?.IsGenericType == true && type.BaseType.GetGenericTypeDefinition() == typeof(igHashTable<,>))
@@ -137,7 +136,10 @@ namespace Alchemy
 
             if (version == GameVersion.NSX)
             {
-                return _fieldsNSX;
+                // Fields that only exist on PC are removed (see SwitchLayout)
+                return _fieldsNSX ??= _fields
+                    .Where(f => f.GameVersions.HasFlag(GameVersion.NSX) && !SwitchLayout.IsRemoved(f.GetFieldInfo()))
+                    .ToList();
             }
 
             return _fields;

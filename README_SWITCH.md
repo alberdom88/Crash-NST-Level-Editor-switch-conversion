@@ -9,9 +9,16 @@ Il gioco PC e' compilato con MSVC, quello Switch con Clang (ABI Itanium). Clang 
 il padding finale della classe base: i campi di una classe derivata partono dalla
 fine dei dati della base (per `igObject` 12 byte) e non dalla sua dimensione
 arrotondata (16 byte). `src/Utils/SwitchLayout.cs` ricalcola cosi' la struttura
-Switch di ogni oggetto a partire da quella PC e la controlla con le dimensioni reali
-estratte dal gioco (`assets/switch_sizes.json`), usando come riserva gli offset CTR (PS4,
-anch'esso Clang).
+Switch di ogni oggetto a partire da quella PC:
+
+- i dati che l'editor non descrive (dimensione PC piu' grande dei campi) vengono
+  mantenuti, e i campi che l'editor ridichiara dentro quei dati (per esempio
+  `igBoolMetaFieldInstance._default`) si spostano con loro;
+- i campi che esistono solo su PC (Steam, mouse, opzioni grafiche PC...) vengono
+  trovati confrontando con le dimensioni reali estratte dal gioco
+  (`assets/switch_sizes.json`): un campo viene tolto solo se corregge una dimensione
+  senza sbagliarne nessun'altra;
+- gli offset CTR (PS4, anch'esso Clang) e quelli PC servono da riserva.
 
 Cambiano anche: versione dell'archivio (12), cartella interna (`nx`), intestazione
 LZMA (4 byte), piattaforma negli igz (2).
@@ -20,17 +27,32 @@ LZMA (4 byte), piattaforma negli igz (2).
 
 ```
 NST.exe --switch layout [report.txt]
+NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]
 NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
+        [--come-originale] [--pc-originali <cartella_archives_pc>]
 ```
 
-- `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti.
+- `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti,
+  elenca i campi solo PC e controlla che i campi non si sovrappongano.
+- `struttura`: legge i file del gioco Switch con la struttura calcolata e, per ogni
+  tipo, elenca i byte diversi da zero che non cadono in nessun campo conosciuto
+  (campi mancanti o fuori posto). `--pak` limita la lettura agli archivi il cui nome
+  contiene il testo indicato.
 - `verifica`: per ogni igz del .pak PC che esiste anche nel gioco Switch legge il file
   PC con la struttura PC e quello Switch con la struttura calcolata e confronta tutti i
-  valori; riscrive poi il file PC in formato Switch e lo rilegge.
-- `converti` (sperimentale): crea un archivio Switch prendendo dagli originali Switch
-  gli asset condivisi e convertendo i file del livello. Le collisioni Havok e la grafica
-  non vengono ancora convertite.
+  valori; riscrive poi il file PC in formato Switch e lo rilegge. Con l'archivio
+  originale PC di un livello (stessi contenuti della Switch) le differenze che restano
+  sono solo quelle di piattaforma.
+- `converti` (sperimentale): crea un archivio Switch. I file non modificati e gli asset
+  condivisi vengono presi dagli originali Switch, i file del livello vengono convertiti.
+  - `--pc-originali`: cartella `archives` del gioco PC; i file identici agli originali
+    PC vengono presi dagli originali Switch.
+  - `--come-originale`: il livello creato dall'editor (`..._Custom`) riprende il nome
+    del livello originale, cosi' l'archivio puo' sostituirlo.
+  Le collisioni Havok e la grafica non vengono ancora convertite (si usano quelle
+  originali Switch quando esistono).
 
 La build per Windows la produce GitHub Actions (`.github/workflows/switch-build.yml`):
-artifact `NST-Switch-win-x64`.
+artifact `NST-Switch-win-x64`. Il log della build e il rapporto `layout` vengono
+anche salvati nel ramo `ci-reports`.
