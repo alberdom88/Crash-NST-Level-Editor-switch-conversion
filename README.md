@@ -2,6 +2,11 @@
 
 A mod manager and level editor for Crash NST and CTR:NF (WIP)
 
+> **Nintendo Switch** — questo fork aggiunge un convertitore dei livelli PC per la versione
+> Switch del gioco: istruzioni in [README_SWITCH.md](README_SWITCH.md). I livelli convertiti
+> si installano e si avviano sulla Switch con l'app
+> [NST Pak Manager](https://github.com/alberdom88/nst-pak-manager).
+
 <img src="docs/src/assets/screenshots/editor.jpg" alt="Crash NST Maker" width="750"/>
 
 ### Features

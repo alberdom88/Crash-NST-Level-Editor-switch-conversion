@@ -1423,6 +1423,13 @@ namespace NST
 
         private static int Convert(string pcPath, string switchDir, string outputPath, string reportPath, Options options)
         {
+            // Cartelle di uscita (archivio e rapporto) create se mancano
+            foreach (string path in new[] { outputPath, reportPath })
+            {
+                string? dir = Path.GetDirectoryName(Path.GetFullPath(path));
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            }
+
             var report = new StringBuilder();
             report.AppendLine("CONVERSIONE PC -> SWITCH");
             report.AppendLine($"archivio PC: {pcPath}");

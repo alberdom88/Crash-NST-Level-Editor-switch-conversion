@@ -1,83 +1,167 @@
-# Strumenti per la versione Nintendo Switch
+# Crash NST Maker per Nintendo Switch
 
-Fork di Crash NST Maker con il supporto per i file della versione Switch (archivi
-versione 12, `GameVersion.NSX`).
+Fork di [Crash NST Maker](https://github.com/kishimisu/Crash-NST-Level-Editor) con un
+convertitore da riga di comando che trasforma i livelli fatti sul PC (archivi `.pak` della
+versione PC) in archivi per la versione **Nintendo Switch** di Crash Bandicoot N. Sane
+Trilogy (archivi versione 12, `GameVersion.NSX`).
 
-## Perche' la struttura cambia
+Per installare e giocare i livelli convertiti sulla Switch c'è l'app homebrew
+**[NST Pak Manager](https://github.com/alberdom88/nst-pak-manager)**: li scarica da MEGA o
+dal PC, registra i livelli nuovi e avvia il gioco direttamente dentro il livello. La
+procedura completa, dalla preparazione della Switch al primo livello, è nel
+[README dell'app](https://github.com/alberdom88/nst-pak-manager#procedura-completa).
 
-Il gioco PC e' compilato con MSVC, quello Switch con Clang (ABI Itanium). Clang riusa
-il padding finale della classe base: i campi di una classe derivata partono dalla
-fine dei dati della base (per `igObject` 12 byte) e non dalla sua dimensione
-arrotondata (16 byte). `src/Utils/SwitchLayout.cs` ricalcola cosi' la struttura
-Switch di ogni oggetto a partire da quella PC:
+- [Procedura](#procedura)
+- [Comando `converti`](#comando-converti) e [come scegliere l'opzione](#quale-opzione-usare)
+- [Provare su Eden](#provare-su-eden)
+- [Altri comandi](#altri-comandi) · [Come funziona la conversione](#come-funziona-la-conversione)
 
-- i dati che l'editor non descrive (dimensione PC piu' grande dei campi) vengono
-  mantenuti, e i campi che l'editor ridichiara dentro quei dati (per esempio
-  `igBoolMetaFieldInstance._default`) si spostano con loro;
-- i campi che esistono solo su PC (Steam, mouse, opzioni grafiche PC...) vengono
-  trovati confrontando con le dimensioni reali estratte dal gioco
-  (`assets/switch_sizes.json`): un campo viene tolto solo se corregge una dimensione
-  senza sbagliarne nessun'altra;
-- gli offset CTR (PS4, anch'esso Clang) e quelli PC servono da riserva.
+## Procedura
 
-Cambiano anche: versione dell'archivio (12), cartella interna (`nx`), intestazione
-LZMA (4 byte), piattaforma negli igz (2).
+1. **Scarica il convertitore.** Scheda **Actions** di questo repository → ultima esecuzione
+   riuscita di *Build (Switch tools)* → artifact **NST-Switch-win-x64** (zip con `NST.exe`,
+   per Windows). Il log della build e il rapporto `layout` sono anche nel ramo `ci-reports`.
+2. **Fai il dump del gioco Switch con Eden** (una volta, e di nuovo se aggiorni il gioco):
+   tasto destro sul gioco → **Dump RomFS**, con l'aggiornamento installato. I file finiscono in
+   `%APPDATA%\eden\dump\0100D1B006744000\romfs\`. Il convertitore prende dal dump gli asset
+   Switch (texture, modelli, suoni) che il `.pak` PC non può contenere in formato Switch.
+3. **Crea il livello** con Crash NST Maker e salvalo: ottieni il `.pak` PC.
+4. **Converti** (da una finestra del prompt nella cartella di `NST.exe`):
+   ```
+   NST.exe --switch converti "MioLivello.pak" "%APPDATA%\eden\dump\0100D1B006744000\romfs" "out\MioLivello.pak" "out\report.txt" --nuovo
+   ```
+   Le cartelle di uscita vengono create se mancano. Con `--nuovo` l'archivio prende il nome
+   del livello (per esempio `out\Custom_Level.pak`).
+5. **Installa sulla Switch** con [NST Pak Manager](https://github.com/alberdom88/nst-pak-manager):
+   carica l'archivio convertito nella cartella MEGA (o del PC) e nell'app premi **Y** sul
+   livello. Serve solo l'archivio del livello: `update.pak` lo crea l'app.
 
-## Comandi
+Il rapporto (`report.txt`) elenca cosa è stato convertito, cosa è stato preso dagli
+originali Switch, cosa è stato saltato e, con `--nuovo`, cosa è finito nella registrazione
+del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non funziona.
+
+## Comando `converti`
+
+```
+NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
+        [--nuovo | --come-originale | --sostituisci <livello>]
+        [--base <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]
+```
+
+- `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
+  `archives`); vengono letti tutti i `.pak` che contiene.
+- I file di posizionamento del livello (`maps/`, il pacchetto) e la collisione statica
+  (Havok) vengono convertiti dal PC; gli asset vengono presi dagli originali Switch, con le
+  loro dipendenze Switch (per esempio le texture dei materiali, che hanno nomi diversi da
+  quelle PC). La grafica PC non viene convertita.
+
+### Quale opzione usare
+
+| Opzione | Quando | Risultato |
+|---|---|---|
+| `--nuovo` | livello con un nome qualsiasi (per esempio `Custom_Level`): **consigliata** | tiene il suo nome; si apre con l'avvio diretto dell'app, nei menu del gioco non compare |
+| `--come-originale` | livello creato nell'editor da uno originale (`L112_RoadToNowhere_Custom`) | riprende il nome dell'originale e lo sostituisce: si gioca anche dai menu |
+| `--sostituisci <livello>` | mettere il livello al posto di un livello originale scelto (per esempio `L101_NSanityBeach`) | cartella, nomi dei file e riferimenti diventano quelli del livello scelto |
+| nessuna | livello che ha già il nome di un originale | conversione senza cambi di nome |
+
+Dettagli:
+
+- `--nuovo`: come quando si preme *Play* nell'editor su un livello nuovo, il livello va
+  registrato nel gioco (la sua *zone info* elencata nel pacchetto di `chunkInfos`, dentro
+  `update.pak`). Il convertitore:
+  - mette i file della registrazione nell'archivio del livello, nella cartella interna
+    `update/` (non compressi): NST Pak Manager (1.7 o successivo) li unisce all'`update.pak`
+    originale quando avvii il livello, quindi sulla Switch basta l'archivio del livello;
+  - scrive anche `update.pak` accanto all'archivio (l'originale Switch più la
+    registrazione), da usare **solo su Eden**, dove l'app non c'è.
+
+  Le opzioni speciali dell'editor (personaggio, hub, veicoli) non sono ancora convertite:
+  il rapporto lo segnala.
+- `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
+  sostituisce, quindi si installa con il nome dell'originale (l'app lo fa da sola).
+- `--sostituisci <livello>`: si indica il nome dell'archivio del livello da sostituire,
+  senza `.pak`. Se il livello usa file del livello sostituito che finirebbero con lo stesso
+  nome dei suoi, la conversione si ferma: scegli un altro livello.
+- `--base <livello>`: archivio Switch da cui prendere gli asset del livello di partenza.
+  Con `--come-originale`, `--sostituisci` e con `--nuovo` per i livelli `..._Custom` si
+  trova da solo.
+- `--senza-base`: non aggiunge gli asset dell'archivio Switch di partenza.
+- `--pc-originali`: cartella `archives` del gioco PC, se ce l'hai; i file identici agli
+  originali PC vengono presi dagli originali Switch.
+
+## Provare su Eden
+
+Prima di copiare un livello sulla Switch si può provare su Eden. I file vanno nella cartella
+delle mod del gioco (tasto destro sul gioco → cartella dei dati delle mod, di solito
+`%APPDATA%\eden\load\0100D1B006744000\`), in una sottocartella per mod:
+
+```
+load\0100D1B006744000\Mio livello\romfs\archives\
+├── Custom_Level.pak    ← l'archivio convertito
+└── update.pak          ← solo con --nuovo: quello scritto dal convertitore
+```
+
+Un livello convertito con `--nuovo` si apre solo con l'avvio diretto: serve la patch e un
+`debug.xml` con il nome del livello. Li crea `tools/crea_avvio_livello.py` di
+[NST Pak Manager](https://github.com/alberdom88/nst-pak-manager#provare-un-livello-su-eden),
+indicando l'archivio convertito:
+
+```
+python tools\crea_avvio_livello.py "%APPDATA%\eden\dump\0100D1B006744000" "out\Custom_Level.pak"
+```
+
+La cartella `avvio_livello\eden\NST avvio livello` va copiata nella cartella delle mod. Tieni
+un solo `update.pak` tra le mod attive; per tornare al gioco normale togli `debug.xml`.
+
+## Altri comandi
+
+Servono a verificare e mettere a punto la conversione, non per l'uso normale:
 
 ```
 NST.exe --switch layout [report.txt]
 NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]
 NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]
 NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]
-NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
-        [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base]
-        [--pc-originali <cartella_archives_pc>]
 ```
 
-- `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti,
-  elenca i campi solo PC e controlla che i campi non si sovrappongano.
-- `struttura`: legge i file del gioco Switch con la struttura calcolata e, per ogni
-  tipo, elenca i byte diversi da zero che non cadono in nessun campo conosciuto
-  (campi mancanti o fuori posto). `--pak` limita la lettura agli archivi il cui nome
-  contiene il testo indicato.
-- `verifica`: per ogni igz del .pak PC che esiste anche nel gioco Switch legge il file
-  PC con la struttura PC e quello Switch con la struttura calcolata e confronta tutti i
-  valori; riscrive poi il file PC in formato Switch e lo rilegge. Con l'archivio
-  originale PC di un livello (stessi contenuti della Switch) le differenze che restano
-  sono solo quelle di piattaforma.
-- `riscrivi`: riscrive un archivio Switch originale con l'editor, per provare in gioco
-  la scrittura degli archivi (`--igz nessuno`) e degli igz (`maps`: file del livello e
-  collisione statica, `tutti`: tutti tranne le texture, compresi i file Havok). Il rapporto dice quanti igz riscritti sono
-  identici byte per byte all'originale.
-- `converti` (sperimentale): crea un archivio Switch partendo dall'archivio Switch del
-  livello originale. I file di posizionamento del livello (`maps/`) vengono convertiti
-  dal PC; gli asset vengono presi dagli originali Switch, insieme alle loro dipendenze
-  Switch (per esempio le texture Switch dei materiali, che hanno nomi diversi da quelle PC).
-  - `--pc-originali`: cartella `archives` del gioco PC; i file identici agli originali
-    PC vengono presi dagli originali Switch.
-  - `--come-originale`: il livello creato dall'editor da un livello esistente
-    (`..._Custom`) riprende il nome del livello originale, cosi' l'archivio puo' sostituirlo.
-  - `--sostituisci <livello>`: per i livelli nuovi (`Custom_Level`) o per metterli al posto
-    di un altro livello: cartella, nomi dei file e riferimenti diventano quelli del livello
-    scelto (per esempio `L101_NSanityBeach`), e l'archivio va installato con il suo nome.
-  - `--nuovo`: il livello tiene il suo nome, come quando si preme *Play* nell'editor su
-    un livello nuovo. Oltre all'archivio (che prende il nome del livello, per esempio
-    `Custom_Level.pak`) crea `update.pak`: l'`update.pak` originale della Switch con la
-    zone info del livello e il file del pacchetto di `chunkInfos` che la elenca. Si
-    installano tutti e due e il livello si apre con l'avvio diretto (`debug.xml`), perché
-    nei menu del gioco non compare. Un solo livello nuovo alla volta: ogni `update.pak`
-    registra solo il suo. I file della registrazione restano anche nell'archivio del
-    livello, nella cartella interna `update/` (non compressi): NST Pak Manager 1.7 li
-    usa per creare `update.pak` da solo, quindi sulla Switch basta il livello. Le opzioni speciali dell'editor (personaggio, hub, veicoli)
-    non sono ancora convertite.
-  - `--base <livello>`: archivio Switch da cui prendere gli asset mancanti (con `--nuovo`
-    di solito si trova da solo per i livelli `..._Custom`).
-  - `--senza-base`: non aggiunge gli asset dell'archivio Switch del livello sostituito.
-  La collisione statica del livello (Havok) viene convertita: i file Havok della Switch
-  usano la stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor
-  conosce gia'. La grafica non viene convertita: si usano gli originali Switch.
+- `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti, elenca
+  i campi solo PC e controlla che i campi non si sovrappongano (lo esegue anche la build).
+- `struttura`: legge i file del gioco Switch con la struttura calcolata e, per ogni tipo,
+  elenca i byte diversi da zero che non cadono in nessun campo conosciuto. `--pak` limita la
+  lettura agli archivi il cui nome contiene il testo indicato.
+- `verifica`: per ogni igz del `.pak` PC che esiste anche nel gioco Switch legge il file PC
+  con la struttura PC e quello Switch con la struttura calcolata e confronta tutti i valori;
+  riscrive poi il file PC in formato Switch e lo rilegge.
+- `riscrivi`: riscrive un archivio Switch originale con l'editor, per provare in gioco la
+  scrittura degli archivi (`--igz nessuno`) e degli igz (`maps`: file del livello e
+  collisione statica; `tutti`: tutti tranne le texture, compresi i file Havok). Il rapporto
+  dice quanti igz riscritti sono identici byte per byte all'originale.
 
-La build per Windows la produce GitHub Actions (`.github/workflows/switch-build.yml`):
-artifact `NST-Switch-win-x64`. Il log della build e il rapporto `layout` vengono
-anche salvati nel ramo `ci-reports`.
+## Come funziona la conversione
+
+Il gioco PC è compilato con MSVC, quello Switch con Clang (ABI Itanium). Clang riusa il
+padding finale della classe base: i campi di una classe derivata partono dalla fine dei dati
+della base (per `igObject` 12 byte) e non dalla sua dimensione arrotondata (16 byte).
+`src/Utils/SwitchLayout.cs` ricalcola così la struttura Switch di ogni oggetto a partire da
+quella PC:
+
+- i dati che l'editor non descrive (dimensione PC più grande dei campi) vengono mantenuti, e
+  i campi che l'editor ridichiara dentro quei dati (per esempio
+  `igBoolMetaFieldInstance._default`) si spostano con loro;
+- i campi che esistono solo su PC (Steam, mouse, opzioni grafiche PC...) vengono trovati
+  confrontando con le dimensioni reali estratte dal gioco (`assets/switch_sizes.json`): un
+  campo viene tolto solo se corregge una dimensione senza sbagliarne nessun'altra;
+- gli offset CTR (PS4, anch'esso Clang) e quelli PC servono da riserva.
+
+Cambiano anche: versione dell'archivio (12), cartella interna (`nx`), intestazione LZMA
+(4 byte), piattaforma negli igz (2). I file Havok della Switch (collisione statica) usano la
+stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor conosce già.
+
+Quando un livello cambia nome (`--come-originale`, `--sostituisci`) vengono rinominati anche
+i riferimenti interni: namespace degli igz, nomi nella collisione statica, chiavi della
+tabella delle collisioni (`hash del namespace << 32 | hash dell'oggetto`) e voci del
+pacchetto.
+
+Il codice è in `src/Switch/SwitchTools.cs` (comandi) e `src/Utils/SwitchLayout.cs`
+(struttura degli oggetti). La build per Windows la produce GitHub Actions
+(`.github/workflows/switch-build.yml`).
