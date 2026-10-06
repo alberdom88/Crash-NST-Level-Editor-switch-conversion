@@ -52,6 +52,8 @@ namespace NST
             public string IgzMode = "maps";
             public string? ReplaceLevel;
             public bool WithoutBase;
+            public bool NewLevel;
+            public string? BaseLevel;
         }
 
         public static int Run(string[] args)
@@ -114,6 +116,8 @@ namespace NST
                 else if (name == "--igz" && hasValue) { options.IgzMode = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--sostituisci" && hasValue) { options.ReplaceLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--senza-base") { options.WithoutBase = true; rest.RemoveAt(i); }
+                else if (name == "--nuovo") { options.NewLevel = true; rest.RemoveAt(i); }
+                else if (name == "--base" && hasValue) { options.BaseLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -126,7 +130,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1443,6 +1447,34 @@ namespace NST
             LevelRename? rename = null;
             string? baseArchive = null;
 
+            if (options.NewLevel && (options.ReplaceLevel != null || options.RenameBack))
+            {
+                Console.WriteLine("Errore: --nuovo non si usa insieme a --sostituisci o --come-originale");
+                return 1;
+            }
+
+            // Livello nuovo con il suo nome: l'archivio si deve chiamare come il livello
+            (string dir, string name)? newPackage = null;
+            if (options.NewLevel)
+            {
+                newPackage = pc.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null);
+                if (newPackage == null)
+                {
+                    Console.WriteLine("Errore: --nuovo: nel file non c'e' un livello (packages/generated/maps/...)");
+                    return 1;
+                }
+                if (LevelNames(index.Keys).Any(l => l.Equals(newPackage.Value.name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    report.AppendLine($"ATTENZIONE: {newPackage.Value.name} esiste gia' nel gioco: per sostituirlo usa --come-originale o --sostituisci");
+                }
+                string wanted = newPackage.Value.name + ".pak";
+                if (!Path.GetFileName(outputPath).Equals(wanted, StringComparison.Ordinal))
+                {
+                    outputPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", wanted);
+                    report.AppendLine($"--nuovo: l'archivio prende il nome del livello: {outputPath}");
+                }
+            }
+
             if (options.ReplaceLevel != null)
             {
                 // The level replaces the chosen original level
@@ -1468,6 +1500,17 @@ namespace NST
             }
 
             // Archive of the original level in the Switch game (base of the new archive)
+            if (baseArchive == null && options.BaseLevel != null)
+            {
+                if (sw.ByArchive.ContainsKey(options.BaseLevel.ToLowerInvariant())) baseArchive = options.BaseLevel.ToLowerInvariant();
+                else report.AppendLine($"--base: archivio {options.BaseLevel}.pak non trovato nel gioco Switch");
+            }
+            if (baseArchive == null && options.NewLevel)
+            {
+                // Livello creato da uno originale (..._Custom): gli asset di partenza sono quelli dell'originale
+                var detected = DetectRename(pc, index);
+                if (detected != null && sw.ByArchive.ContainsKey(detected.Value.to.ToLowerInvariant())) baseArchive = detected.Value.to.ToLowerInvariant();
+            }
             if (baseArchive == null)
             {
                 string? baseLevel = rename?.ToName ?? levels.FirstOrDefault();
@@ -1512,6 +1555,7 @@ namespace NST
             var fromSwitch = new List<IgArchiveFile>();
             var counters = new Dictionary<string, int>();
             var lines = new List<string>();
+            var registration = new List<IgArchiveFile>();
             int done = 0;
 
             void AddOriginal(IgArchiveFile file, string counter)
@@ -1530,6 +1574,14 @@ namespace NST
 
                 try
                 {
+                    // Livello nuovo: la zone info e gli altri file update/ vanno in update.pak
+                    if (options.NewLevel && path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        registration.Add(file);
+                        Increment(counters, "file update/ spostati in update.pak");
+                        continue;
+                    }
+
                     // The zone info of a new level is not needed when it replaces the original one
                     if (rename != null && path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1748,6 +1800,33 @@ namespace NST
                 lines.Add($"ERRORE aggiornando il file del pacchetto: {e.Message}");
             }
 
+            string? updatePath = null;
+            if (options.NewLevel && newPackage != null)
+            {
+                updatePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", "update.pak");
+                string levelId = (newPackage.Value.dir + "/" + newPackage.Value.name).ToLowerInvariant();
+                var embedded = new List<(string path, byte[] data)>();
+                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded))
+                {
+                    updatePath = null;
+                    Increment(counters, "errori");
+                }
+                else
+                {
+                    // Gli stessi file di registrazione restano anche nell'archivio del livello, in update/
+                    // (non compressi): NST Pak Manager li unisce da solo all'update.pak originale
+                    foreach (var (path, data) in embedded)
+                    {
+                        IgArchiveFile copy = new IgArchiveFile("update/" + path, GameVersion.NSX);
+                        copy.SetData(data);
+                        output.AddFile(copy);
+                    }
+                    report.AppendLine($"Installa insieme {Path.GetFileName(outputPath)} e update.pak (sostituisce l'originale); avvio diretto: {levelId}");
+                    report.AppendLine("Con NST Pak Manager 1.7 basta il livello: update.pak lo crea l'app dai file update/ del livello");
+                }
+                report.AppendLine();
+            }
+
             output.Save(outputPath);
 
             report.AppendLine($"file nell'archivio: {output.Files.Count}");
@@ -1758,7 +1837,144 @@ namespace NST
             File.WriteAllText(reportPath, report.ToString());
             foreach (var (key, count) in counters.OrderBy(e => e.Key)) Console.WriteLine($"  {key}: {count}");
             Console.WriteLine($"Archivio Switch scritto in {outputPath} ({output.Files.Count} file, dettagli in {reportPath})");
+            if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
+            else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
             return 0;
+        }
+
+        // ------------------------------------------------------------------ livello nuovo
+
+        private static void ReplaceFile(IgArchive archive, string path, byte[] data)
+        {
+            foreach (IgArchiveFile old in archive.Files.Where(f => f.Path.Equals(path, StringComparison.OrdinalIgnoreCase)).ToList())
+            {
+                archive.RemoveFile(old);
+            }
+            IgArchiveFile file = new IgArchiveFile(path, GameVersion.NSX);
+            file.SetData(data);
+            archive.AddFile(file);
+        }
+
+        /// <summary>
+        /// Come il tasto Play dell'editor per un livello nuovo: update.pak (quello originale Switch) con
+        /// la zone info del livello e il file del pacchetto di chunkInfos che la elenca tra i file
+        /// da caricare all'avvio. Cosi' il gioco conosce il livello anche se non ha il nome di uno originale.
+        /// </summary>
+        private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
+                                              List<(string path, byte[] data)> embedded)
+        {
+            string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
+            report.AppendLine("REGISTRAZIONE DEL LIVELLO (update.pak)");
+
+            IgArchive update = new IgArchive(updatePath, GameVersion.NSX);
+            if (sw.ByArchive.TryGetValue("update", out List<IgArchiveFile>? originals))
+            {
+                foreach (IgArchiveFile file in originals) update.AddFile(file.Clone());
+                long size = originals.Sum(f => (long)f.GetData().Length);
+                report.AppendLine($"  update.pak originale Switch: {originals.Count} file ({size / 1024} KB)");
+            }
+            else
+            {
+                report.AppendLine("  update.pak originale non trovato nel dump: il nuovo contiene solo la registrazione");
+            }
+
+            // Zone info e altri file update/ del livello, convertiti
+            var zoneInfos = new List<string>();
+            foreach (IgArchiveFile file in updateFiles)
+            {
+                string path = file.Path.Substring("update/".Length);
+                try
+                {
+                    byte[] data;
+                    if (file.IsIGZ())
+                    {
+                        IgzFile igz = file.ToIgzFile();
+                        if (path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase))
+                        {
+                            zoneInfos.Add(path);
+                            AdjustZoneInfo(igz, report);
+                        }
+                        igz.GameVersion = GameVersion.NSX;
+                        data = igz.Save();
+                    }
+                    else
+                    {
+                        data = file.Uncompress();
+                    }
+                    ReplaceFile(update, path, data);
+                    embedded.Add((path, data));
+                    report.AppendLine($"  aggiunto: {path}");
+                }
+                catch (Exception e)
+                {
+                    report.AppendLine($"  ERRORE {file.Path}: {e.Message}");
+                }
+            }
+
+            if (!zoneInfos.Any(z => z.Equals(zoneInfoPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                string game = levelId.Substring(0, levelId.IndexOf('/'));
+                (CZoneInfo zoneInfo, igLocalizedInfo localizedInfo) = ObjectFactory.CreateZoneInfo(levelId, LevelBuilder.GetGameYear(game));
+                zoneInfo._zoneVehicle = null;
+                IgzFile igz = new IgzFile(zoneInfoPath, [zoneInfo, localizedInfo], GameVersion.NSX);
+                byte[] zoneInfoData = igz.Save();
+                ReplaceFile(update, zoneInfoPath, zoneInfoData);
+                embedded.Add((zoneInfoPath, zoneInfoData));
+                zoneInfos.Add(zoneInfoPath);
+                report.AppendLine($"  zone info creata (il livello non ne aveva una): {zoneInfoPath}");
+            }
+
+            // File del pacchetto di chunkInfos: la versione di update.pak, se c'e', altrimenti quella di chunkInfos.pak
+            IgArchiveFile? chunkPackage = null;
+            if (sw.ByArchive.TryGetValue("chunkinfos", out List<IgArchiveFile>? chunkFiles))
+            {
+                List<IgArchiveFile> packages = chunkFiles.Where(f => f.Path.EndsWith("_pkg.igz", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (packages.Count == 1) chunkPackage = packages[0];
+            }
+            if (chunkPackage == null)
+            {
+                report.AppendLine("  ERRORE: chunkInfos.pak (o il suo file _pkg.igz) non trovato nel dump");
+                return false;
+            }
+            IgArchiveFile source = update.Files.FirstOrDefault(f => f.Path.Equals(chunkPackage.Path, StringComparison.OrdinalIgnoreCase)) ?? chunkPackage;
+            IgzFile packageIgz = source.ToIgzFile();
+            igStreamingChunkInfo? chunkInfo = packageIgz.FindObject<igStreamingChunkInfo>();
+            if (chunkInfo == null)
+            {
+                report.AppendLine($"  ERRORE: {chunkPackage.Path} non contiene igStreamingChunkInfo");
+                return false;
+            }
+            foreach (string zoneInfo in zoneInfos)
+            {
+                if (chunkInfo._required._data.Any(e => e._name != null && e._name.Equals(zoneInfo, StringComparison.OrdinalIgnoreCase))) continue;
+                chunkInfo._required._data.Add(new ChunkFileInfoMetaField() { _type = "igx_file", _name = zoneInfo });
+                report.AppendLine($"  registrata in {chunkPackage.Path}: {zoneInfo}");
+            }
+            packageIgz.GameVersion = GameVersion.NSX;
+            byte[] packageData = packageIgz.Save();
+            ReplaceFile(update, chunkPackage.Path, packageData);
+            embedded.Add((chunkPackage.Path, packageData));
+
+            update.Save(updatePath);
+            report.AppendLine($"  scritto {updatePath} ({update.Files.Count} file)");
+            return true;
+        }
+
+        /// <summary>
+        /// Le stesse correzioni dell'editor alla zone info di un livello nuovo (veicolo dalle opzioni speciali)
+        /// </summary>
+        private static void AdjustZoneInfo(IgzFile igz, StringBuilder report)
+        {
+            CZoneInfo? zoneInfo = igz.FindObject<CZoneInfo>();
+            if (zoneInfo == null) return;
+
+            List<string> options = GameplayModeManager.GetSpecialZoneInfoOptions(zoneInfo._build);
+            zoneInfo._zoneVehicle = options.Contains("jetski") ? "CocoJetski" : options.Contains("plane") ? "CrashCocoPlane" : null;
+            if (options.Count > 0)
+            {
+                report.AppendLine($"  ATTENZIONE: opzioni speciali del livello ({string.Join(", ", options)}): i dati del personaggio/hub " +
+                                  "che l'editor crea per queste opzioni non vengono ancora convertiti");
+            }
         }
 
         private static bool IsGraphicsType(string typeName) => _graphicsTypes.Contains(typeName) || typeName.EndsWith("Material");

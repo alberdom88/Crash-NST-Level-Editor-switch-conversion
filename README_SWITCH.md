@@ -31,7 +31,8 @@ NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--m
 NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]
 NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
-        [--come-originale | --sostituisci <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]
+        [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base]
+        [--pc-originali <cartella_archives_pc>]
 ```
 
 - `layout`: confronta le dimensioni calcolate con quelle reali di tutti i tipi noti,
@@ -60,6 +61,18 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
   - `--sostituisci <livello>`: per i livelli nuovi (`Custom_Level`) o per metterli al posto
     di un altro livello: cartella, nomi dei file e riferimenti diventano quelli del livello
     scelto (per esempio `L101_NSanityBeach`), e l'archivio va installato con il suo nome.
+  - `--nuovo`: il livello tiene il suo nome, come quando si preme *Play* nell'editor su
+    un livello nuovo. Oltre all'archivio (che prende il nome del livello, per esempio
+    `Custom_Level.pak`) crea `update.pak`: l'`update.pak` originale della Switch con la
+    zone info del livello e il file del pacchetto di `chunkInfos` che la elenca. Si
+    installano tutti e due e il livello si apre con l'avvio diretto (`debug.xml`), perché
+    nei menu del gioco non compare. Un solo livello nuovo alla volta: ogni `update.pak`
+    registra solo il suo. I file della registrazione restano anche nell'archivio del
+    livello, nella cartella interna `update/` (non compressi): NST Pak Manager 1.7 li
+    usa per creare `update.pak` da solo, quindi sulla Switch basta il livello. Le opzioni speciali dell'editor (personaggio, hub, veicoli)
+    non sono ancora convertite.
+  - `--base <livello>`: archivio Switch da cui prendere gli asset mancanti (con `--nuovo`
+    di solito si trova da solo per i livelli `..._Custom`).
   - `--senza-base`: non aggiunge gli asset dell'archivio Switch del livello sostituito.
   La collisione statica del livello (Havok) viene convertita: i file Havok della Switch
   usano la stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor
