@@ -1427,15 +1427,18 @@ namespace NST
         // ------------------------------------------------------------------ converti
 
         /// <summary>
-        /// File del livello stesso (posizione degli oggetti, pacchetto, collisione, zone info): hanno il nome
-        /// del livello nel percorso. I file di altri livelli che l'editor copia nell'archivio (per esempio
-        /// maps/Crash3/L309_TombTime/L309_TombTime.igz, da cui il livello usa degli oggetti) non lo sono:
-        /// se esistono nel gioco Switch si usano gli originali, senza convertire la copia PC.
+        /// File del livello stesso: quelli nella sua cartella (maps/Crash1/L112_RoadToNowhere/...,
+        /// anche per un livello creato dall'editor da uno originale, L112_RoadToNowhere_Custom, i cui file
+        /// modificati tengono i nomi dell'originale) o con il suo nome nel percorso (pacchetto, collisione,
+        /// zone info). I file di altri livelli che l'editor copia nell'archivio quando usi i loro oggetti
+        /// (per esempio maps/Crash3/L309_TombTime/L309_TombTime.igz) non lo sono: se esistono nel gioco
+        /// Switch si usano gli originali, senza convertire la copia PC.
         /// </summary>
-        private static bool IsLevelContent(string path, List<string> levels)
+        private static bool IsLevelContent(string path, List<string> levels, List<string> levelDirs)
         {
-            string lower = path.ToLowerInvariant();
-            if (lower.StartsWith("update/")) return true;
+            string lower = "/" + path.ToLowerInvariant();
+            if (lower.StartsWith("/update/")) return true;
+            if (levelDirs.Any(d => lower.Contains("/" + d.ToLowerInvariant().Trim('/') + "/"))) return true;
             return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
         }
 
@@ -1472,6 +1475,7 @@ namespace NST
 
             IgArchive pc = IgArchive.Open(pcPath);
             List<string> levels = LevelNames(pc.Files.Select(f => f.Path));
+            List<string> levelDirs = pc.Files.Select(f => PackageInfo(f.Path)).Where(p => p != null).Select(p => p!.Value.dir).Distinct().ToList();
             report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
 
             LevelRename? rename = null;
@@ -1670,7 +1674,7 @@ namespace NST
                         unmodified = SameData(file, pcOriginal);
                     }
 
-                    bool levelContent = IsLevelContent(path, levels);
+                    bool levelContent = IsLevelContent(path, levels, levelDirs);
                     bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
 
                     if (original != null)
@@ -1903,6 +1907,21 @@ namespace NST
                 report.AppendLine();
             }
 
+            // File che i file convertiti dal PC usano ma che il gioco Switch non ha da nessuna parte (per esempio
+            // asset di Crash Team Racing importati nell'editor, o grafica PC saltata): il livello li cerchera'
+            // durante il caricamento e potrebbe bloccarsi
+            var missingReferences = FindMissingReferences(output, fromSwitch, index.Keys);
+            if (missingReferences.Count > 0)
+            {
+                report.AppendLine($"=== FILE USATI DAL LIVELLO CHE IL GIOCO SWITCH NON HA ({missingReferences.Count}) ===");
+                report.AppendLine("Il livello usa oggetti di questi file, che non sono nell'archivio ne' nel gioco Switch: il");
+                report.AppendLine("caricamento puo' bloccarsi. Di solito sono asset PC non convertibili (grafica, modelli) o");
+                report.AppendLine("importati da altri giochi (Octane = Crash Team Racing).");
+                foreach (var (name, users) in missingReferences)
+                    report.AppendLine($"  {name}  (usato da {string.Join(", ", users.Take(3).Select(u => NamespaceUtils.GetFileName(u)))}{(users.Count > 3 ? $" e altri {users.Count - 3}" : "")})");
+                report.AppendLine();
+            }
+
             // Windows tiene la grafia di un file gia' esistente: un vecchio Custom_Level.pak resterebbe con
             // le maiuscole anche scrivendo custom_level.pak, quindi si toglie prima
             string? outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
@@ -1938,7 +1957,61 @@ namespace NST
             if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
             else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
             if (nameWarning != null) Console.WriteLine(nameWarning);
+            if (missingReferences.Count > 0)
+            {
+                Console.WriteLine($"ATTENZIONE: il livello usa {missingReferences.Count} file che il gioco Switch non ha " +
+                                  $"(per esempio {string.Join(", ", missingReferences.Keys.Take(3))}): il caricamento puo' bloccarsi. Elenco nel rapporto.");
+            }
             return 0;
+        }
+
+        /// <summary>
+        /// Namespace usati dai file convertiti dal PC (riferimenti negli oggetti e dipendenze) che non
+        /// corrispondono a nessun file dell'archivio di uscita ne' del gioco Switch. Chiave: nome, valore:
+        /// file che lo usano.
+        /// </summary>
+        private static SortedDictionary<string, SortedSet<string>> FindMissingReferences(IgArchive output, List<IgArchiveFile> fromSwitch,
+                                                                                         IEnumerable<string> switchPaths)
+        {
+            var available = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void AddName(string path)
+            {
+                foreach (string name in NameAliases(NamespaceUtils.GetFileName(path, false).ToLowerInvariant())) available.Add(name);
+            }
+            foreach (string path in switchPaths) AddName(path);
+            foreach (IgArchiveFile file in output.Files) AddName(file.Path);
+
+            var originals = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+            var missing = new SortedDictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (IgArchiveFile file in output.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!file.IsIGZ() || originals.Contains(lower) || lower.StartsWith("update/")) continue;
+
+                HashSet<string> references;
+                try
+                {
+                    references = RawDependencies(file.Uncompress());
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string name in references)
+                {
+                    // Solo nomi di file (i percorsi completi sono presenti anche come nome); i numeri sono hash
+                    if (name.Length == 0 || name.Contains('/') || name.Contains(':') || name.All(char.IsDigit)) continue;
+                    if (available.Contains(name)) continue;
+                    if (!missing.TryGetValue(name, out SortedSet<string>? users))
+                    {
+                        users = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                        missing[name] = users;
+                    }
+                    users.Add(file.Path);
+                }
+            }
+            return missing;
         }
 
         // ------------------------------------------------------------------ livello nuovo
