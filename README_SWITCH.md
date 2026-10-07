@@ -28,10 +28,13 @@ procedura completa, dalla preparazione della Switch al primo livello, è nel
 3. **Crea il livello** con Crash NST Maker e salvalo: ottieni il `.pak` PC.
 4. **Converti** (da una finestra del prompt nella cartella di `NST.exe`):
    ```
-   NST.exe --switch converti "MioLivello.pak" "%APPDATA%\eden\dump\0100D1B006744000\romfs" "out\MioLivello.pak" "out\report.txt" --nuovo
+   NST.exe --switch converti "Level 3.pak" "%APPDATA%\eden\dump\0100D1B006744000\romfs" "out\MioLivello.pak" "out\report.txt" --nuovo
    ```
-   Le cartelle di uscita vengono create se mancano. Con `--nuovo` l'archivio prende il nome
-   del livello (per esempio `out\Custom_Level.pak`).
+   Le cartelle di uscita vengono create se mancano. Con `--nuovo` il nome lo decidi tu con il
+   file di uscita: qui il livello diventa `MioLivello` (cartella, file interni, riferimenti e
+   registrazione), qualunque nome avesse nell'editor. L'archivio viene scritto in minuscolo,
+   `out\miolivello.pak`, perché sulla Switch gli archivi dei livelli sono tutti in minuscolo
+   e il gioco li cerca così. Nel nome valgono lettere, cifre e `_` (gli spazi diventano `_`).
 5. **Installa sulla Switch** con [NST Pak Manager](https://github.com/alberdom88/nst-pak-manager):
    carica l'archivio convertito nella cartella MEGA (o del PC) e nell'app premi **Y** sul
    livello. Serve solo l'archivio del livello: `update.pak` lo crea l'app.
@@ -59,15 +62,20 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
 
 | Opzione | Quando | Risultato |
 |---|---|---|
-| `--nuovo` | livello con un nome qualsiasi (per esempio `Custom_Level`): **consigliata** | tiene il suo nome; si apre con l'avvio diretto dell'app, nei menu del gioco non compare |
+| `--nuovo` | livello nuovo, con il nome che vuoi: **consigliata** | prende il nome del file di uscita; si apre con l'avvio diretto dell'app, nei menu del gioco non compare |
 | `--come-originale` | livello creato nell'editor da uno originale (`L112_RoadToNowhere_Custom`) | riprende il nome dell'originale e lo sostituisce: si gioca anche dai menu |
 | `--sostituisci <livello>` | mettere il livello al posto di un livello originale scelto (per esempio `L101_NSanityBeach`) | cartella, nomi dei file e riferimenti diventano quelli del livello scelto |
 | nessuna | livello che ha già il nome di un originale | conversione senza cambi di nome |
 
 Dettagli:
 
-- `--nuovo`: come quando si preme *Play* nell'editor su un livello nuovo, il livello va
-  registrato nel gioco (la sua *zone info* elencata nel pacchetto di `chunkInfos`, dentro
+- `--nuovo`: il livello prende il nome del file di uscita (`out\MioLivello.pak` → livello
+  `MioLivello`, archivio `miolivello.pak`, avvio diretto `crash1/miolivello/miolivello`).
+  Se il nome è già quello di un livello del gioco la conversione si ferma (per sostituirlo
+  c'è `--sostituisci`); lo stesso se il livello nell'editor ha il nome di un originale
+  (`L101_NSanityBeach`), perché i suoi file sono quelli dell'originale: salvalo con un nome
+  nuovo o usa `--come-originale`. Come quando si preme *Play* nell'editor su un livello
+  nuovo, il livello va registrato nel gioco (la sua *zone info* elencata nel pacchetto di `chunkInfos`, dentro
   `update.pak`). Il convertitore:
   - mette i file della registrazione nell'archivio del livello, nella cartella interna
     `update/` (non compressi): NST Pak Manager (1.7 o successivo) li unisce all'`update.pak`
@@ -78,7 +86,8 @@ Dettagli:
   Le opzioni speciali dell'editor (personaggio, hub, veicoli) non sono ancora convertite:
   il rapporto lo segnala.
 - `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
-  sostituisce, quindi si installa con il nome dell'originale (l'app lo fa da sola).
+  sostituisce, quindi si installa con il nome dell'archivio originale, in minuscolo come
+  sulla Switch (`l112_roadtonowhere.pak`; l'app lo fa da sola, su Eden rinominalo così).
 - `--sostituisci <livello>`: si indica il nome dell'archivio del livello da sostituire,
   senza `.pak`. Se il livello usa file del livello sostituito che finirebbero con lo stesso
   nome dei suoi, la conversione si ferma: scegli un altro livello.
@@ -97,7 +106,7 @@ delle mod del gioco (tasto destro sul gioco → cartella dei dati delle mod, di 
 
 ```
 load\0100D1B006744000\Mio livello\romfs\archives\
-├── Custom_Level.pak    ← l'archivio convertito
+├── miolivello.pak      ← l'archivio convertito (nome in minuscolo)
 └── update.pak          ← solo con --nuovo: quello scritto dal convertitore
 ```
 
@@ -107,11 +116,16 @@ Un livello convertito con `--nuovo` si apre solo con l'avvio diretto: serve la p
 indicando l'archivio convertito:
 
 ```
-python tools\crea_avvio_livello.py "%APPDATA%\eden\dump\0100D1B006744000" "out\Custom_Level.pak"
+python tools\crea_avvio_livello.py "%APPDATA%\eden\dump\0100D1B006744000" "out\miolivello.pak"
 ```
 
 La cartella `avvio_livello\eden\NST avvio livello` va copiata nella cartella delle mod. Tieni
 un solo `update.pak` tra le mod attive; per tornare al gioco normale togli `debug.xml`.
+
+Il nome dell'archivio conta: il gioco apre `archives/<livello in minuscolo>.pak` e la romfs
+distingue maiuscole e minuscole, quindi `Custom_Level.pak` non viene trovato e il gioco resta
+sulla schermata di caricamento. Il convertitore e `crea_avvio_livello.py` avvisano se il nome
+non è quello giusto; sulla Switch NST Pak Manager (1.8.1 o successivo) lo sistema da solo.
 
 ## Altri comandi
 

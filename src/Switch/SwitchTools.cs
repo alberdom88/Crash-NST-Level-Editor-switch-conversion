@@ -1377,6 +1377,26 @@ namespace NST
         }
 
         /// <summary>
+        /// Nome del livello ricavato dal nome del file di uscita: solo lettere, cifre e _
+        /// (gli altri caratteri diventano _), per esempio "Mio livello 2.pak" -> "Mio_livello_2"
+        /// </summary>
+        private static string LevelNameFromFile(string path)
+        {
+            var name = new StringBuilder();
+            foreach (char c in Path.GetFileNameWithoutExtension(path))
+            {
+                bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+                char next = valid ? c : '_';
+                if (next == '_' && (name.Length == 0 || name[name.Length - 1] == '_')) continue;
+                name.Append(next);
+            }
+            string result = name.ToString().TrimEnd('_');
+            // Un nome che inizia con una cifra potrebbe essere scambiato per un hash: "3livello" -> "L3livello"
+            if (result.Length > 0 && result[0] >= '0' && result[0] <= '9') result = "L" + result;
+            return result;
+        }
+
+        /// <summary>
         /// The level of the PC archive takes the place of an original Switch level
         /// </summary>
         private static LevelRename? FindReplacement(IgArchive pc, ArchiveIndex sw, string levelName, out IgArchiveFile? switchPackage)
@@ -1460,7 +1480,8 @@ namespace NST
                 return 1;
             }
 
-            // Livello nuovo con il suo nome: l'archivio si deve chiamare come il livello
+            // Livello nuovo: prende il nome dell'archivio di uscita (il gioco apre archives/<livello>.pak,
+            // quindi file e livello devono avere lo stesso nome)
             (string dir, string name)? newPackage = null;
             if (options.NewLevel)
             {
@@ -1470,16 +1491,52 @@ namespace NST
                     Console.WriteLine("Errore: --nuovo: nel file non c'e' un livello (packages/generated/maps/...)");
                     return 1;
                 }
-                if (LevelNames(index.Keys).Any(l => l.Equals(newPackage.Value.name, StringComparison.OrdinalIgnoreCase)))
+                List<string> switchLevels = LevelNames(index.Keys);
+                string pcName = newPackage.Value.name;
+                string requested = LevelNameFromFile(outputPath);
+                if (requested.Length == 0) requested = pcName;
+                if (!requested.Equals(Path.GetFileNameWithoutExtension(outputPath), StringComparison.OrdinalIgnoreCase))
                 {
-                    report.AppendLine($"ATTENZIONE: {newPackage.Value.name} esiste gia' nel gioco: per sostituirlo usa --come-originale o --sostituisci");
+                    report.AppendLine($"--nuovo: '{Path.GetFileNameWithoutExtension(outputPath)}' non e' un nome di livello valido (solo lettere, cifre e _): uso {requested}");
                 }
-                string wanted = newPackage.Value.name + ".pak";
+
+                if (!requested.Equals(pcName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (switchLevels.Any(l => l.Equals(requested, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        report.AppendLine($"--nuovo: {requested} e' il nome di un livello del gioco: per sostituirlo usa --sostituisci {requested}");
+                        File.WriteAllText(reportPath, report.ToString());
+                        Console.WriteLine($"Errore: {requested} e' gia' un livello del gioco. Scegli un altro nome di uscita oppure usa --sostituisci {requested}");
+                        return 1;
+                    }
+                    if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        // Gli asset del livello originale hanno lo stesso nome: rinominarli li staccherebbe dagli originali Switch
+                        report.AppendLine($"--nuovo: il livello si chiama come l'originale {pcName} e non si puo' rinominare in {requested}");
+                        File.WriteAllText(reportPath, report.ToString());
+                        Console.WriteLine($"Errore: il livello si chiama {pcName}, come un livello del gioco: non si puo' rinominare. " +
+                                          $"Usa --come-originale o --sostituisci, oppure salvalo nell'editor con un nome nuovo.");
+                        return 1;
+                    }
+                    string game = newPackage.Value.dir.Split('/')[0];
+                    rename = new LevelRename { FromName = pcName, ToName = requested, FromDir = newPackage.Value.dir, ToDir = game + "/" + requested };
+                    newPackage = (game + "/" + requested, requested);
+                    report.AppendLine($"--nuovo: il livello prende il nome indicato: {rename}");
+                }
+                else if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    report.AppendLine($"ATTENZIONE: {pcName} esiste gia' nel gioco: per sostituirlo usa --come-originale o --sostituisci");
+                }
+
+                // Sulla Switch gli archivi dei livelli sono in minuscolo (l112_roadtonowhere.pak) e il gioco
+                // apre archives/<livello in minuscolo>.pak: la romfs distingue le maiuscole
+                string wanted = newPackage.Value.name.ToLowerInvariant() + ".pak";
                 if (!Path.GetFileName(outputPath).Equals(wanted, StringComparison.Ordinal))
                 {
                     outputPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", wanted);
-                    report.AppendLine($"--nuovo: l'archivio prende il nome del livello: {outputPath}");
+                    report.AppendLine($"--nuovo: archivio scritto come {wanted} (in minuscolo, come lo cerca il gioco)");
                 }
+                report.AppendLine($"--nuovo: livello {newPackage.Value.dir}/{newPackage.Value.name}, avvio diretto: {(newPackage.Value.dir + "/" + newPackage.Value.name).ToLowerInvariant()}");
             }
 
             if (options.ReplaceLevel != null)
@@ -1520,7 +1577,8 @@ namespace NST
             }
             if (baseArchive == null)
             {
-                string? baseLevel = rename?.ToName ?? levels.FirstOrDefault();
+                // Con --nuovo il nome di arrivo e' nuovo: la base resta quella del livello PC
+                string? baseLevel = (options.NewLevel ? null : rename?.ToName) ?? levels.FirstOrDefault();
                 if (baseLevel != null && sw.ByArchive.ContainsKey(baseLevel.ToLowerInvariant())) baseArchive = baseLevel.ToLowerInvariant();
             }
             if (options.WithoutBase) baseArchive = null;
@@ -1548,11 +1606,12 @@ namespace NST
 
                 if (conflicts.Count > 0)
                 {
-                    report.AppendLine($"ERRORE: il livello usa file del livello {rename.ToName}, che avrebbero lo stesso nome dei suoi:");
+                    string choose = options.NewLevel ? "scegli un altro nome" : "scegli un altro livello da sostituire";
+                    report.AppendLine($"ERRORE: il livello usa file chiamati {rename.ToName}, che avrebbero lo stesso nome dei suoi:");
                     foreach (string conflict in conflicts) report.AppendLine("  " + conflict);
-                    report.AppendLine("Scegli un altro livello da sostituire.");
+                    report.AppendLine(char.ToUpper(choose[0]) + choose.Substring(1) + ".");
                     File.WriteAllText(reportPath, report.ToString());
-                    Console.WriteLine($"Errore: il livello usa file di {rename.ToName} ({string.Join(", ", conflicts.Select(c => NamespaceUtils.GetFileName(c)))}): scegli un altro livello da sostituire.");
+                    Console.WriteLine($"Errore: il livello usa file di {rename.ToName} ({string.Join(", ", conflicts.Select(c => NamespaceUtils.GetFileName(c)))}): {choose}.");
                     return 1;
                 }
             }
@@ -1813,7 +1872,7 @@ namespace NST
                 updatePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", "update.pak");
                 string levelId = (newPackage.Value.dir + "/" + newPackage.Value.name).ToLowerInvariant();
                 var embedded = new List<(string path, byte[] data)>();
-                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded))
+                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -1834,7 +1893,29 @@ namespace NST
                 report.AppendLine();
             }
 
+            // Windows tiene la grafia di un file gia' esistente: un vecchio Custom_Level.pak resterebbe con
+            // le maiuscole anche scrivendo custom_level.pak, quindi si toglie prima
+            string? outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (outputDir != null && File.Exists(outputPath) &&
+                !Path.GetFullPath(outputPath).Equals(Path.GetFullPath(pcPath), StringComparison.OrdinalIgnoreCase))
+            {
+                string? existing = Directory.EnumerateFiles(outputDir)
+                    .FirstOrDefault(f => Path.GetFileName(f).Equals(Path.GetFileName(outputPath), StringComparison.OrdinalIgnoreCase));
+                if (existing != null && Path.GetFileName(existing) != Path.GetFileName(outputPath)) File.Delete(existing);
+            }
+
             output.Save(outputPath);
+
+            // Nome del file: il gioco Switch cerca archives/<livello in minuscolo>.pak
+            string? nameWarning = null;
+            var outputPackage = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null);
+            if (outputPackage != null)
+            {
+                string expected = outputPackage.Value.name.ToLowerInvariant() + ".pak";
+                if (!Path.GetFileName(outputPath).Equals(expected, StringComparison.Ordinal))
+                    nameWarning = $"ATTENZIONE: per Eden il file deve chiamarsi {expected} (il gioco cerca il livello in minuscolo); NST Pak Manager lo rinomina da solo";
+            }
+            if (nameWarning != null) report.AppendLine(nameWarning);
 
             report.AppendLine($"file nell'archivio: {output.Files.Count}");
             foreach (var (key, count) in counters.OrderBy(e => e.Key)) report.AppendLine($"  {key}: {count}");
@@ -1846,6 +1927,7 @@ namespace NST
             Console.WriteLine($"Archivio Switch scritto in {outputPath} ({output.Files.Count} file, dettagli in {reportPath})");
             if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
             else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
+            if (nameWarning != null) Console.WriteLine(nameWarning);
             return 0;
         }
 
@@ -1868,7 +1950,8 @@ namespace NST
         /// da caricare all'avvio. Cosi' il gioco conosce il livello anche se non ha il nome di uno originale.
         /// </summary>
         private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
-                                              List<(string path, byte[] data)> embedded)
+                                              List<(string path, byte[] data)> embedded, LevelRename? rename,
+                                              Dictionary<string, string> renamedNamespaces)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine("REGISTRAZIONE DEL LIVELLO (update.pak)");
@@ -1890,27 +1973,40 @@ namespace NST
             foreach (IgArchiveFile file in updateFiles)
             {
                 string path = file.Path.Substring("update/".Length);
+                // Livello rinominato (nome dell'archivio di uscita): anche zone info e riferimenti
+                string newPath = rename != null ? rename.Apply(path) : path;
+                bool renamed = newPath != path;
+                string? newNamespace = renamed ? NamespaceUtils.GetFileName(newPath, false) : null;
+                bool isZoneInfo = path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase);
+                // La zone info del livello si registra con il percorso usato dal gioco (minuscolo)
+                string renamedPath = isZoneInfo && newPath.Equals(zoneInfoPath, StringComparison.OrdinalIgnoreCase) ? zoneInfoPath : newPath;
                 try
                 {
                     byte[] data;
                     if (file.IsIGZ())
                     {
                         IgzFile igz = file.ToIgzFile();
-                        if (path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase))
+                        if (rename != null)
                         {
-                            zoneInfos.Add(path);
+                            int count = RenameNamespaces(igz, renamedNamespaces);
+                            if (count > 0) report.AppendLine($"  riferimenti al livello rinominati: {count} in {renamedPath}");
+                        }
+                        if (isZoneInfo)
+                        {
+                            zoneInfos.Add(renamedPath);
+                            if (rename != null) RenameZoneInfo(igz, rename, levelId, report);
                             AdjustZoneInfo(igz, report);
                         }
                         igz.GameVersion = GameVersion.NSX;
-                        data = igz.Save();
+                        data = newNamespace != null ? igz.Save(newNamespace) : igz.Save();
                     }
                     else
                     {
                         data = file.Uncompress();
                     }
-                    ReplaceFile(update, path, data);
-                    embedded.Add((path, data));
-                    report.AppendLine($"  aggiunto: {path}");
+                    ReplaceFile(update, renamedPath, data);
+                    embedded.Add((renamedPath, data));
+                    report.AppendLine(renamed ? $"  aggiunto: {path} -> {renamedPath}" : $"  aggiunto: {path}");
                 }
                 catch (Exception e)
                 {
@@ -1954,7 +2050,7 @@ namespace NST
             foreach (string zoneInfo in zoneInfos)
             {
                 if (chunkInfo._required._data.Any(e => e._name != null && e._name.Equals(zoneInfo, StringComparison.OrdinalIgnoreCase))) continue;
-                chunkInfo._required._data.Add(new ChunkFileInfoMetaField() { _type = "igx_file", _name = zoneInfo });
+                chunkInfo._required._data.Add(new ChunkFileInfoMetaField() { _type = "igx_file", _name = zoneInfo.ToLowerInvariant() });
                 report.AppendLine($"  registrata in {chunkPackage.Path}: {zoneInfo}");
             }
             packageIgz.GameVersion = GameVersion.NSX;
@@ -1965,6 +2061,22 @@ namespace NST
             update.Save(updatePath);
             report.AppendLine($"  scritto {updatePath} ({update.Files.Count} file)");
             return true;
+        }
+
+        /// <summary>
+        /// Zone info di un livello rinominato: il gioco la cerca per nome (findZoneInfoByName con
+        /// l'identificativo del livello), quindi nome, nome del salvataggio e voce del menu di debug
+        /// prendono il nome nuovo
+        /// </summary>
+        private static void RenameZoneInfo(IgzFile igz, LevelRename rename, string levelId, StringBuilder report)
+        {
+            CZoneInfo? zoneInfo = igz.FindObject<CZoneInfo>();
+            if (zoneInfo == null) return;
+            string? oldName = zoneInfo._name;
+            zoneInfo._name = levelId;
+            if (zoneInfo._saveName != null) zoneInfo._saveName = ReplaceIgnoreCase(zoneInfo._saveName, rename.FromName, rename.ToName).ToLowerInvariant();
+            if (zoneInfo._debugMenuName != null) zoneInfo._debugMenuName = ReplaceIgnoreCase(zoneInfo._debugMenuName, rename.FromName, rename.ToName);
+            report.AppendLine($"  zone info rinominata: {oldName} -> {levelId}");
         }
 
         /// <summary>
