@@ -48,17 +48,18 @@ del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non 
 ```
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--nuovo | --come-originale | --sostituisci <livello>]
-        [--base <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]
+        [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
+        [--pc-originali <cartella_archives_pc>]
 ```
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
   `archives`); vengono letti tutti i `.pak` che contiene.
-- I file del livello stesso (posizionamento degli oggetti in `maps/`, il pacchetto, la zone
-  info) e la sua collisione statica (Havok) vengono convertiti dal PC. Tutto il resto viene
-  preso dagli originali Switch, con le loro dipendenze Switch (per esempio le texture dei
-  materiali, che hanno nomi diversi da quelle PC): gli asset e anche i file di altri livelli
-  che l'editor copia nell'archivio quando usi i loro oggetti (per esempio
-  `maps/Crash3/L309_TombTime/L309_TombTime.igz`). La grafica PC non viene convertita.
+- I file di posizionamento del livello (`maps/`, il pacchetto, la zone info) e la collisione
+  statica (Havok) vengono convertiti dal PC; gli asset vengono presi dagli originali Switch,
+  con le loro dipendenze Switch (per esempio le texture dei materiali, che hanno nomi diversi
+  da quelle PC). La grafica PC non viene convertita. Per i file di altri livelli copiati
+  dall'editor vedi `--altri-livelli`. Alla fine il rapporto elenca i file usati dal livello che
+  il gioco Switch non ha (per esempio asset importati da Crash Team Racing).
 
 ### Quale opzione usare
 
@@ -97,6 +98,13 @@ Dettagli:
   Con `--come-originale`, `--sostituisci` e con `--nuovo` per i livelli `..._Custom` si
   trova da solo.
 - `--senza-base`: non aggiunge gli asset dell'archivio Switch di partenza.
+- `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
+  usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
+  - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
+  - `originali`: si usano gli originali Switch, senza le loro dipendenze. Utile se un livello
+    installato blocca il caricamento di altri livelli;
+  - `originali+dipendenze`: originali Switch con tutte le loro dipendenze (archivio molto più
+    grande, il caricamento può bloccarsi).
 - `--pc-originali`: cartella `archives` del gioco PC, se ce l'hai; i file identici agli
   originali PC vengono presi dagli originali Switch.
 

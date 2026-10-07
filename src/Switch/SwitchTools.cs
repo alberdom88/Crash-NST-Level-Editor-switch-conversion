@@ -54,6 +54,9 @@ namespace NST
             public bool WithoutBase;
             public bool NewLevel;
             public string? BaseLevel;
+            // File di altri livelli copiati dall'editor: "converti" (copie PC convertite, come fino alla v12),
+            // "originali" (originali Switch), "originali+dipendenze" (originali Switch con tutte le loro dipendenze)
+            public string OtherLevels = "converti";
         }
 
         public static int Run(string[] args)
@@ -118,6 +121,7 @@ namespace NST
                 else if (name == "--senza-base") { options.WithoutBase = true; rest.RemoveAt(i); }
                 else if (name == "--nuovo") { options.NewLevel = true; rest.RemoveAt(i); }
                 else if (name == "--base" && hasValue) { options.BaseLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--altri-livelli" && hasValue) { options.OtherLevels = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -130,7 +134,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1434,6 +1438,14 @@ namespace NST
         /// (per esempio maps/Crash3/L309_TombTime/L309_TombTime.igz) non lo sono: se esistono nel gioco
         /// Switch si usano gli originali, senza convertire la copia PC.
         /// </summary>
+        private static bool IsLevelContentAll(string path, List<string> levels)
+        {
+            // Regola fino alla v12: tutto quello che sta in maps/ e packages/ si converte dal PC
+            string lower = path.ToLowerInvariant();
+            if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) return true;
+            return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
+        }
+
         private static bool IsLevelContent(string path, List<string> levels, List<string> levelDirs)
         {
             string lower = "/" + path.ToLowerInvariant();
@@ -1476,6 +1488,14 @@ namespace NST
             IgArchive pc = IgArchive.Open(pcPath);
             List<string> levels = LevelNames(pc.Files.Select(f => f.Path));
             List<string> levelDirs = pc.Files.Select(f => PackageInfo(f.Path)).Where(p => p != null).Select(p => p!.Value.dir).Distinct().ToList();
+            string otherLevels = options.OtherLevels;
+            if (otherLevels != "converti" && otherLevels != "originali" && otherLevels != "originali+dipendenze")
+            {
+                Console.WriteLine($"Errore: --altri-livelli {otherLevels}: valori possibili converti, originali, originali+dipendenze");
+                return 1;
+            }
+            bool otherLevelsFromSwitch = otherLevels != "converti";
+            report.AppendLine($"file di altri livelli copiati dall'editor: {otherLevels}");
             report.AppendLine($"livelli nel file: {string.Join(", ", levels)}");
 
             LevelRename? rename = null;
@@ -1629,6 +1649,7 @@ namespace NST
             var counters = new Dictionary<string, int>();
             var lines = new List<string>();
             var registration = new List<IgArchiveFile>();
+            var otherLevelOriginals = new HashSet<IgArchiveFile>();
             int done = 0;
 
             void AddOriginal(IgArchiveFile file, string counter)
@@ -1674,18 +1695,21 @@ namespace NST
                         unmodified = SameData(file, pcOriginal);
                     }
 
-                    bool levelContent = IsLevelContent(path, levels, levelDirs);
+                    bool levelContent = otherLevelsFromSwitch ? IsLevelContent(path, levels, levelDirs) : IsLevelContentAll(path, levels);
                     bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
 
                     if (original != null)
                     {
                         if (unmodified == true) { AddOriginal(original, "non modificati: presi dagli originali Switch"); continue; }
                         if (!file.IsIGZ() && !(collision && file.IsHKX())) { AddOriginal(original, "file non igz presi dagli originali Switch"); continue; }
-                        if (unmodified == null && !levelContent)
+                        // (fino alla v12 le collisioni si convertivano sempre: con "converti" resta cosi')
+                        if (unmodified == null && !levelContent && (otherLevelsFromSwitch || !collision))
                         {
-                            bool otherLevel = target.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) || target.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) ||
-                                              target.StartsWith("models/maps/", StringComparison.OrdinalIgnoreCase);
+                            bool otherLevel = otherLevelsFromSwitch &&
+                                              (target.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) || target.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) ||
+                                               target.StartsWith("models/maps/", StringComparison.OrdinalIgnoreCase));
                             AddOriginal(original, otherLevel ? "file di altri livelli presi dagli originali Switch" : "asset presi dagli originali Switch");
+                            if (otherLevel) otherLevelOriginals.Add(original);
                             if (otherLevel) lines.Add($"originale Switch (file di un altro livello): {target}");
                             continue;
                         }
@@ -1836,6 +1860,8 @@ namespace NST
                 IgArchiveFile file = fromSwitch[i];
                 if (!file.IsIGZ() || file.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!sw.ArchiveOf.TryGetValue(file, out string? archive)) continue;
+                // I file di altri livelli si portano dietro tutto il loro livello: le dipendenze solo se richieste
+                if (otherLevelOriginals.Contains(file) && otherLevels != "originali+dipendenze") continue;
 
                 HashSet<string> dependencies;
                 try
@@ -2002,6 +2028,7 @@ namespace NST
                 {
                     // Solo nomi di file (i percorsi completi sono presenti anche come nome); i numeri sono hash
                     if (name.Length == 0 || name.Contains('/') || name.Contains(':') || name.All(char.IsDigit)) continue;
+                    if (name.StartsWith("meta")) continue;  // metaobject, metafield, ...: tipi del motore, non file
                     if (available.Contains(name)) continue;
                     if (!missing.TryGetValue(name, out SortedSet<string>? users))
                     {
