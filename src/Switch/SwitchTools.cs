@@ -1427,12 +1427,15 @@ namespace NST
         // ------------------------------------------------------------------ converti
 
         /// <summary>
-        /// Files that belong to the level itself (placement of the objects, package, zone info)
+        /// File del livello stesso (posizione degli oggetti, pacchetto, collisione, zone info): hanno il nome
+        /// del livello nel percorso. I file di altri livelli che l'editor copia nell'archivio (per esempio
+        /// maps/Crash3/L309_TombTime/L309_TombTime.igz, da cui il livello usa degli oggetti) non lo sono:
+        /// se esistono nel gioco Switch si usano gli originali, senza convertire la copia PC.
         /// </summary>
         private static bool IsLevelContent(string path, List<string> levels)
         {
             string lower = path.ToLowerInvariant();
-            if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) return true;
+            if (lower.StartsWith("update/")) return true;
             return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
         }
 
@@ -1674,7 +1677,14 @@ namespace NST
                     {
                         if (unmodified == true) { AddOriginal(original, "non modificati: presi dagli originali Switch"); continue; }
                         if (!file.IsIGZ() && !(collision && file.IsHKX())) { AddOriginal(original, "file non igz presi dagli originali Switch"); continue; }
-                        if (unmodified == null && !levelContent && !collision) { AddOriginal(original, "asset presi dagli originali Switch"); continue; }
+                        if (unmodified == null && !levelContent)
+                        {
+                            bool otherLevel = target.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) || target.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) ||
+                                              target.StartsWith("models/maps/", StringComparison.OrdinalIgnoreCase);
+                            AddOriginal(original, otherLevel ? "file di altri livelli presi dagli originali Switch" : "asset presi dagli originali Switch");
+                            if (otherLevel) lines.Add($"originale Switch (file di un altro livello): {target}");
+                            continue;
+                        }
                     }
 
                     // Havok file (static collision of the level): converted to the Switch layout

@@ -53,10 +53,12 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
   `archives`); vengono letti tutti i `.pak` che contiene.
-- I file di posizionamento del livello (`maps/`, il pacchetto) e la collisione statica
-  (Havok) vengono convertiti dal PC; gli asset vengono presi dagli originali Switch, con le
-  loro dipendenze Switch (per esempio le texture dei materiali, che hanno nomi diversi da
-  quelle PC). La grafica PC non viene convertita.
+- I file del livello stesso (posizionamento degli oggetti in `maps/`, il pacchetto, la zone
+  info) e la sua collisione statica (Havok) vengono convertiti dal PC. Tutto il resto viene
+  preso dagli originali Switch, con le loro dipendenze Switch (per esempio le texture dei
+  materiali, che hanno nomi diversi da quelle PC): gli asset e anche i file di altri livelli
+  che l'editor copia nell'archivio quando usi i loro oggetti (per esempio
+  `maps/Crash3/L309_TombTime/L309_TombTime.igz`). La grafica PC non viene convertita.
 
 ### Quale opzione usare
 
