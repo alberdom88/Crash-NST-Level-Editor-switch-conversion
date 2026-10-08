@@ -1684,6 +1684,7 @@ namespace NST
             var registration = new List<IgArchiveFile>();
             var otherLevelOriginals = new HashSet<IgArchiveFile>();
             var entityLines = new List<string>();
+            bool levelHasC3Intro = false;
             int done = 0;
 
             void AddOriginal(IgArchiveFile file, string counter)
@@ -1877,9 +1878,13 @@ namespace NST
                             }
                         }
 
-                        // --senza-intro: l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer, Crash che esce dal
-                        // portale) decide quando compare Crash: se non parte, Crash non compare
-                        if (options.WithoutIntro)
+                        // L'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer, Crash che esce dal portale) fa comparire
+                        // Crash: la zone info di un livello di Crash 3 la aspetta (vedi BuildRegistration)
+                        bool hasIntro = igz.Objects.OfType<igEntity>().Any(e => e.GetComponent<common_C3_IntroSequenceData>() != null);
+                        if (hasIntro && !options.WithoutIntro) levelHasC3Intro = true;
+
+                        // --senza-intro: toglie quell'intro
+                        if (options.WithoutIntro && hasIntro)
                         {
                             HashSet<igObject> intros = igz.Objects.OfType<igEntity>()
                                 .Where(e => e.GetComponent<common_C3_IntroSequenceData>() != null)
@@ -2097,9 +2102,19 @@ namespace NST
                 {
                     var detectedBase = DetectRename(pc, index);
                     string game = newPackage.Value.dir.Split('/')[0].ToLowerInvariant();
-                    string gameDefault = game == "crash2" ? "L201_TurtleWoods" : game == "crash3" ? "L301_ToadVillage" : "L101_NSanityBeach";
+                    // Il gioco del livello e' quello scelto nell'editor ("Crash Mode", l'anno della zone info del PC), che
+                    // puo' essere diverso dalla cartella: un livello in crash3 impostato come Crash 1 non ha l'intro di
+                    // Crash 3 e con la zone info di un livello di Crash 3 Crash non compare
+                    EGameYear? pcYear = PcZoneInfoYear(registration);
+                    string yearGame = pcYear == EGameYear.eGY_2017_Crash1 ? "crash1"
+                                    : pcYear == EGameYear.eGY_2017_Crash2 ? "crash2"
+                                    : pcYear == EGameYear.eGY_2017_Crash3 ? "crash3" : game;
+                    string gameDefault = yearGame == "crash2" ? "L201_TurtleWoods" : yearGame == "crash3" ? "L301_ToadVillage" : "L101_NSanityBeach";
                     zoneTemplate = detectedBase != null && FindZoneInfo(sw, detectedBase.Value.to) != null ? detectedBase.Value.to : gameDefault;
                     report.AppendLine($"--nuovo: zone info presa da {zoneTemplate} (scelta automatica; per cambiarla --zoneinfo-da <livello>)");
+                    if (pcYear != null) report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {yearGame}, cartella del livello: {game}");
+                    if (yearGame != game && zoneTemplate == gameDefault)
+                        report.AppendLine($"  il livello e' nella cartella {game} ma nell'editor e' impostato come {yearGame}: zone info di {yearGame}");
                 }
                 else if (zoneTemplate.Equals("pc", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2107,7 +2122,7 @@ namespace NST
                     report.AppendLine("--nuovo: zone info dell'editor convertita dal PC (--zoneinfo-da pc): il gioco potrebbe bloccarsi all'avvio diretto");
                 }
                 if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                       options.SaveMode != "originale"))
+                                       options.SaveMode != "originale", levelHasC3Intro))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2265,7 +2280,7 @@ namespace NST
         private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
-                                              bool ownSave)
+                                              bool ownSave, bool levelHasC3Intro)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -2371,6 +2386,13 @@ namespace NST
                 string? oldName = zoneInfo._name;
                 zoneInfo._name = levelId;
                 if (ownSave) zoneInfo._saveName = levelId.Substring(levelId.LastIndexOf('/') + 1);
+                // Zone info di Crash 3 con l'intro: il gioco aspetta l'intro del livello (Crash che esce dal portale) per far
+                // comparire Crash. Se il livello non ce l'ha, Crash non compare: l'intro si spegne
+                if (!levelHasC3Intro && zoneInfo._year == EGameYear.eGY_2017_Crash3 && zoneInfo._flags._magicMomentIntro)
+                {
+                    zoneInfo._flags._magicMomentIntro = false;
+                    report.AppendLine("  intro della zone info spenta: il livello non ha l'intro di Crash 3 (Crash che esce dal portale)");
+                }
                 igz.GameVersion = GameVersion.NSX;
                 byte[] zoneInfoData = igz.Save(NamespaceUtils.GetFileName(zoneInfoPath, false));
                 ReplaceFile(update, zoneInfoPath, zoneInfoData);
@@ -2430,6 +2452,26 @@ namespace NST
             update.Save(updatePath);
             report.AppendLine($"  scritto {updatePath} ({update.Files.Count} file)");
             return true;
+        }
+
+        /// <summary>
+        /// Anno (gioco) della zone info del livello PC tra i file update/, null se manca o non si legge
+        /// </summary>
+        private static EGameYear? PcZoneInfoYear(List<IgArchiveFile> updateFiles)
+        {
+            foreach (IgArchiveFile file in updateFiles)
+            {
+                if (!file.Path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo zone) return zone._year;
+                }
+                catch
+                {
+                    // zone info non leggibile: si decide dalla cartella
+                }
+            }
+            return null;
         }
 
         private static string DescribeZoneInfo(CZoneInfo zone)

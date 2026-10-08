@@ -107,9 +107,14 @@ Dettagli:
 - `--senza-base`: non aggiunge gli asset dell'archivio Switch di partenza.
 - `--zoneinfo-da <livello>` (con `--nuovo`): livello originale Switch da cui prendere la zone
   info. Senza l'opzione il convertitore sceglie da solo: per un livello creato da uno
-  originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello dello
-  stesso gioco (`L101_NSanityBeach`, `L201_TurtleWoods`, `L301_ToadVillage`). Con `pc` usa la
+  originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello del
+  gioco impostato nell'editor (Crash Mode, che può essere diverso dalla cartella del
+  livello): `L101_NSanityBeach`, `L201_TurtleWoods` o `L301_ToadVillage`. Con `pc` usa la
   zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto.
+  Se il livello è di Crash 3 ma non ha l'intro di Crash 3 (Crash che esce dal portale), nella
+  zone info presa dall'originale l'intro viene spenta: altrimenti il gioco aspetta un'intro
+  che non c'è e Crash non compare. Se Crash continua a non comparire,
+  `--zoneinfo-da L101_NSanityBeach` funziona (il livello segue però le regole di Crash 1).
 - `--salvataggio` (con `--nuovo`): `proprio` (predefinito) dà al livello una voce di
   salvataggio sua, con il suo nome; `originale` usa quella del livello da cui viene la zone
   info (gemme, casse e tempi finiscono su quel livello).
