@@ -57,6 +57,8 @@ namespace NST
             // File di altri livelli copiati dall'editor: "converti" (copie PC convertite, come fino alla v12),
             // "originali" (originali Switch), "originali+dipendenze" (originali Switch con tutte le loro dipendenze)
             public string OtherLevels = "converti";
+            // --nuovo: zone info presa da un livello originale Switch (cambia solo il nome), per le prove
+            public string? ZoneInfoFrom;
         }
 
         public static int Run(string[] args)
@@ -122,6 +124,7 @@ namespace NST
                 else if (name == "--nuovo") { options.NewLevel = true; rest.RemoveAt(i); }
                 else if (name == "--base" && hasValue) { options.BaseLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--altri-livelli" && hasValue) { options.OtherLevels = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
+                else if (name == "--zoneinfo-da" && hasValue) { options.ZoneInfoFrom = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -134,7 +137,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1912,7 +1915,7 @@ namespace NST
                 updatePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", "update.pak");
                 string levelId = (newPackage.Value.dir + "/" + newPackage.Value.name).ToLowerInvariant();
                 var embedded = new List<(string path, byte[] data)>();
-                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces))
+                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, options.ZoneInfoFrom))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2061,10 +2064,23 @@ namespace NST
         /// </summary>
         private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
-                                              Dictionary<string, string> renamedNamespaces)
+                                              Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine("REGISTRAZIONE DEL LIVELLO (update.pak)");
+
+            // --zoneinfo-da: zone info di un livello originale Switch al posto di quella del PC
+            IgArchiveFile? template = null;
+            if (zoneInfoTemplate != null)
+            {
+                string suffix = "/" + zoneInfoTemplate.ToLowerInvariant() + "_zoneinfo.igz";
+                template = sw.ByPath.Where(e => e.Key.StartsWith("maps/") && e.Key.EndsWith(suffix)).Select(e => e.Value).FirstOrDefault();
+                if (template == null)
+                {
+                    report.AppendLine($"  ERRORE: --zoneinfo-da: zone info di {zoneInfoTemplate} non trovata nel dump");
+                    return false;
+                }
+            }
 
             IgArchive update = new IgArchive(updatePath, GameVersion.NSX);
             if (sw.ByArchive.TryGetValue("update", out List<IgArchiveFile>? originals))
@@ -2088,6 +2104,11 @@ namespace NST
                 bool renamed = newPath != path;
                 string? newNamespace = renamed ? NamespaceUtils.GetFileName(newPath, false) : null;
                 bool isZoneInfo = path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase);
+                if (isZoneInfo && template != null)
+                {
+                    report.AppendLine($"  zone info del PC non usata ({path}): --zoneinfo-da {zoneInfoTemplate}");
+                    continue;
+                }
                 // La zone info del livello si registra con il percorso usato dal gioco (minuscolo)
                 string renamedPath = isZoneInfo && newPath.Equals(zoneInfoPath, StringComparison.OrdinalIgnoreCase) ? zoneInfoPath : newPath;
                 try
@@ -2122,6 +2143,26 @@ namespace NST
                 {
                     report.AppendLine($"  ERRORE {file.Path}: {e.Message}");
                 }
+            }
+
+            if (template != null)
+            {
+                IgzFile igz = template.ToIgzFile();
+                CZoneInfo? zoneInfo = igz.FindObject<CZoneInfo>();
+                if (zoneInfo == null)
+                {
+                    report.AppendLine($"  ERRORE: {template.Path} non contiene CZoneInfo");
+                    return false;
+                }
+                string? oldName = zoneInfo._name;
+                zoneInfo._name = levelId;
+                igz.GameVersion = GameVersion.NSX;
+                byte[] zoneInfoData = igz.Save(NamespaceUtils.GetFileName(zoneInfoPath, false));
+                ReplaceFile(update, zoneInfoPath, zoneInfoData);
+                embedded.Add((zoneInfoPath, zoneInfoData));
+                zoneInfos.Add(zoneInfoPath);
+                report.AppendLine($"  zone info presa dall'originale Switch {template.Path}: nome {oldName} -> {levelId}, " +
+                                  $"salvataggio '{zoneInfo._saveName}', nome mostrato '{zoneInfo._displayName}' (come l'originale)");
             }
 
             if (!zoneInfos.Any(z => z.Equals(zoneInfoPath, StringComparison.OrdinalIgnoreCase)))

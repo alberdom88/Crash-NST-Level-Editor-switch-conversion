@@ -49,7 +49,7 @@ del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non 
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
-        [--pc-originali <cartella_archives_pc>]
+        [--zoneinfo-da <livello>] [--pc-originali <cartella_archives_pc>]
 ```
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
@@ -98,11 +98,14 @@ Dettagli:
   Con `--come-originale`, `--sostituisci` e con `--nuovo` per i livelli `..._Custom` si
   trova da solo.
 - `--senza-base`: non aggiunge gli asset dell'archivio Switch di partenza.
+- `--zoneinfo-da <livello>` (con `--nuovo`, per le prove): invece della zone info del PC usa
+  quella del livello originale Switch indicato (per esempio `L112_RoadToNowhere`), cambiando
+  solo il nome. Il livello nuovo ne eredita nome mostrato e salvataggio.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
-  - `originali`: si usano gli originali Switch, senza le loro dipendenze. Utile se un livello
-    installato blocca il caricamento di altri livelli;
+  - `originali`: si usano gli originali Switch, senza le loro dipendenze (provato con
+    `Level 3`: schermo nero dopo il caricamento, per ora non usarlo);
   - `originali+dipendenze`: originali Switch con tutte le loro dipendenze (archivio molto più
     grande, il caricamento può bloccarsi).
 - `--pc-originali`: cartella `archives` del gioco PC, se ce l'hai; i file identici agli
