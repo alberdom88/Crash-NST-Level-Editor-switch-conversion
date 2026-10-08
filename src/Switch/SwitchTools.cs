@@ -67,6 +67,8 @@ namespace NST
             public List<string> Exclude = [];
             // converti: dump di Crash Team Racing Nitro-Fueled per Switch, da cui prendere la grafica che manca (prova)
             public string? CtrDump;
+            // converti: toglie l'intro dei livelli di Crash 3 (Crash che esce dal portale), aggiunta dall'editor
+            public bool WithoutIntro;
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
@@ -140,6 +142,7 @@ namespace NST
                 else if (name == "--salvataggio" && hasValue) { options.SaveMode = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--escludi" && hasValue) { options.Exclude.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--ctr" && hasValue) { options.CtrDump = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--senza-intro") { options.WithoutIntro = true; rest.RemoveAt(i); }
                 else i++;
             }
             return options;
@@ -152,7 +155,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1720,9 +1723,19 @@ namespace NST
                 string key = target.ToLowerInvariant();
                 if (ctr.ByPath.TryGetValue(key, out IgArchiveFile? exact)) return exact;
                 int comma = key.LastIndexOf(',');
-                if (comma <= 0) return null;
-                string prefix = key.Substring(0, comma + 1);
-                return ctr.ByPath.Where(e => e.Key.StartsWith(prefix)).Select(e => e.Value).FirstOrDefault();
+                if (comma > 0)
+                {
+                    string prefix = key.Substring(0, comma + 1);
+                    IgArchiveFile? byPrefix = ctr.ByPath.Where(e => e.Key.StartsWith(prefix)).Select(e => e.Value).FirstOrDefault();
+                    if (byPrefix != null) return byPrefix;
+                }
+                // Stesso nome di file in un'altra cartella (per i materiali: stesso nome fino all'ultima virgola)
+                string fileName = key.Substring(key.LastIndexOf('/') + 1);
+                int nameComma = fileName.LastIndexOf(',');
+                string namePrefix = nameComma > 0 ? fileName.Substring(0, nameComma + 1) : fileName;
+                return ctr.ByPath.Where(e => e.Key.Substring(e.Key.LastIndexOf('/') + 1).StartsWith(namePrefix))
+                                 .Where(e => nameComma > 0 || e.Key.EndsWith("/" + fileName))
+                                 .Select(e => e.Value).FirstOrDefault();
             }
 
             foreach (IgArchiveFile file in pc.Files)
@@ -1851,6 +1864,22 @@ namespace NST
                                 lines.Add($"SALTATO (grafica PC, {graphics}): {path}");
                             }
                             continue;
+                        }
+
+                        // --senza-intro: l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer, Crash che esce dal
+                        // portale) decide quando compare Crash: se non parte, Crash non compare
+                        if (options.WithoutIntro)
+                        {
+                            HashSet<igObject> intros = igz.Objects.OfType<igEntity>()
+                                .Where(e => e.GetComponent<common_C3_IntroSequenceData>() != null)
+                                .Cast<igObject>()
+                                .ToHashSet();
+                            if (intros.Count > 0)
+                            {
+                                HashSet<igObject> removedObjects = igz.Remove(intros);
+                                Increment(counters, "intro di Crash 3 tolte (--senza-intro)");
+                                lines.Add($"intro di Crash 3 tolta da {target} ({removedObjects.Count} oggetti)");
+                            }
                         }
 
                         igz.GameVersion = GameVersion.NSX;
