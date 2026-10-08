@@ -1683,6 +1683,7 @@ namespace NST
             var lines = new List<string>();
             var registration = new List<IgArchiveFile>();
             var otherLevelOriginals = new HashSet<IgArchiveFile>();
+            var entityLines = new List<string>();
             int done = 0;
 
             void AddOriginal(IgArchiveFile file, string counter)
@@ -1864,6 +1865,16 @@ namespace NST
                                 lines.Add($"SALTATO (grafica PC, {graphics}): {path}");
                             }
                             continue;
+                        }
+
+                        // Diagnosi: entita' del file principale del livello (nome, tipo, componenti)
+                        if (levels.Any(l => NamespaceUtils.GetFileName(path, false).Equals(l, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                            {
+                                string components = string.Join(", ", entity.GetComponents().Select(c => c.GetType().Name));
+                                entityLines.Add($"  {entity.ObjectName ?? "?"} [{entity.GetType().Name}] {components}");
+                            }
                         }
 
                         // --senza-intro: l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer, Crash che esce dal
@@ -2145,6 +2156,14 @@ namespace NST
 
             output.Save(outputPath);
 
+            if (entityLines.Count > 0)
+            {
+                report.AppendLine($"=== ENTITA' DEL FILE PRINCIPALE DEL LIVELLO ({entityLines.Count}) ===");
+                foreach (string line in entityLines.Take(200)) report.AppendLine(line);
+                if (entityLines.Count > 200) report.AppendLine($"  ... e altre {entityLines.Count - 200}");
+                report.AppendLine();
+            }
+
             // Nome del file: il gioco Switch cerca archives/<livello in minuscolo>.pak
             string? nameWarning = null;
             var outputPackage = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null);
@@ -2293,6 +2312,14 @@ namespace NST
                 if (isZoneInfo && template != null)
                 {
                     report.AppendLine($"  zone info del PC non usata ({path}): --zoneinfo-da {zoneInfoTemplate}");
+                    try
+                    {
+                        if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo pcZone) report.AppendLine("    PC: " + DescribeZoneInfo(pcZone));
+                    }
+                    catch (Exception e)
+                    {
+                        report.AppendLine($"    PC: non leggibile ({e.Message})");
+                    }
                     continue;
                 }
                 // La zone info del livello si registra con il percorso usato dal gioco (minuscolo)
@@ -2340,6 +2367,7 @@ namespace NST
                     report.AppendLine($"  ERRORE: {template.Path} non contiene CZoneInfo");
                     return false;
                 }
+                report.AppendLine($"    {template.Path}: " + DescribeZoneInfo(zoneInfo));
                 string? oldName = zoneInfo._name;
                 zoneInfo._name = levelId;
                 if (ownSave) zoneInfo._saveName = levelId.Substring(levelId.LastIndexOf('/') + 1);
@@ -2402,6 +2430,13 @@ namespace NST
             update.Save(updatePath);
             report.AppendLine($"  scritto {updatePath} ({update.Files.Count} file)");
             return true;
+        }
+
+        private static string DescribeZoneInfo(CZoneInfo zone)
+        {
+            return $"nome '{zone._name}', anno {zone._year}, build '{zone._build}', personaggio '{zone._overrideCharacter}', " +
+                   $"veicolo '{zone._zoneVehicle}', intro {zone._flags._magicMomentIntro}, boss {zone._flags._isBoss}, menu {zone._flags._isMenu}, " +
+                   $"salvataggio '{zone._saveName}', caricamento '{zone._loadScreenName}'/'{zone._loadMovieName}'";
         }
 
         /// <summary>
