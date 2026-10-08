@@ -65,6 +65,8 @@ namespace NST
             public string SaveMode = "proprio";
             // converti: file del PC da non mettere nell'archivio (testo contenuto nel percorso, per esempio Octane)
             public List<string> Exclude = [];
+            // converti: dump di Crash Team Racing Nitro-Fueled per Switch, da cui prendere la grafica che manca (prova)
+            public string? CtrDump;
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
@@ -137,6 +139,7 @@ namespace NST
                 else if (name == "--registra-in" && hasValue) { options.RegisterIn = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--salvataggio" && hasValue) { options.SaveMode = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--escludi" && hasValue) { options.Exclude.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
+                else if (name == "--ctr" && hasValue) { options.CtrDump = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -149,7 +152,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1492,6 +1495,18 @@ namespace NST
             ArchiveIndex sw = ArchiveIndex.Build(switchDir, null);
             Dictionary<string, IgArchiveFile> index = sw.ByPath;
 
+            // --ctr: grafica che il gioco Switch non ha presa da Crash Team Racing Nitro-Fueled per Switch (prova)
+            ArchiveIndex? ctr = null;
+            if (options.CtrDump != null)
+            {
+                Console.WriteLine("Indicizzo gli archivi di Crash Team Racing...");
+                var ctrErrors = new List<string>();
+                ctr = ArchiveIndex.Build(options.CtrDump, ctrErrors);
+                report.AppendLine($"dump CTR: {options.CtrDump} ({ctr.ByArchive.Count} archivi, {ctr.ByPath.Count} file)");
+                foreach (string error in ctrErrors.Take(20)) report.AppendLine("  ERRORE " + error);
+                if (ctrErrors.Count > 20) report.AppendLine($"  ... e altri {ctrErrors.Count - 20} errori");
+            }
+
             Dictionary<string, IgArchiveFile>? pcIndex = null;
             if (options.PcOriginals != null)
             {
@@ -1675,6 +1690,41 @@ namespace NST
                 Increment(counters, counter);
             }
 
+            // File di CTR Switch: copiati non compressi (CTR potrebbe usare un'altra compressione)
+            var fromCtr = new List<IgArchiveFile>();
+            bool AddCtr(IgArchiveFile file, string counter)
+            {
+                string key = file.Path.ToLowerInvariant();
+                if (included.Contains(key)) return true;
+                try
+                {
+                    IgArchiveFile copy = new IgArchiveFile(file.Path, GameVersion.NSX);
+                    copy.SetData(file.Uncompress());
+                    output.AddFile(copy);
+                    included.Add(key);
+                    fromCtr.Add(file);
+                    Increment(counters, counter);
+                    return true;
+                }
+                catch (Exception e)
+                {
+                    lines.Add($"ERRORE file CTR {file.Path}: {e.Message}");
+                    return false;
+                }
+            }
+
+            // Stesso percorso, oppure (materiali) stesso nome con un suffisso diverso dopo l'ultima virgola
+            IgArchiveFile? FindCtr(string target)
+            {
+                if (ctr == null) return null;
+                string key = target.ToLowerInvariant();
+                if (ctr.ByPath.TryGetValue(key, out IgArchiveFile? exact)) return exact;
+                int comma = key.LastIndexOf(',');
+                if (comma <= 0) return null;
+                string prefix = key.Substring(0, comma + 1);
+                return ctr.ByPath.Where(e => e.Key.StartsWith(prefix)).Select(e => e.Value).FirstOrDefault();
+            }
+
             foreach (IgArchiveFile file in pc.Files)
             {
                 string path = file.Path;
@@ -1786,6 +1836,10 @@ namespace NST
                             {
                                 AddOriginal(original, "grafica presa dagli originali Switch");
                                 lines.Add($"grafica, originale Switch: {target}");
+                            }
+                            else if (FindCtr(target) is IgArchiveFile ctrFile && AddCtr(ctrFile, "grafica presa da CTR Switch"))
+                            {
+                                lines.Add($"grafica da CTR Switch: {ctrFile.Path} (al posto di {path})");
                             }
                             else if (path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase))
                             {
@@ -1908,6 +1962,56 @@ namespace NST
                         AddOriginal(dependency, "dipendenze Switch aggiunte");
                         lines.Add($"dipendenza Switch: {dependency.Path} (da {file.Path})");
                     }
+                }
+            }
+
+            // Dipendenze dei file presi da CTR (texture dei materiali, materiali dei modelli...), dallo stesso archivio CTR
+            if (ctr != null)
+            {
+                for (int i = 0; i < fromCtr.Count; i++)
+                {
+                    IgArchiveFile file = fromCtr[i];
+                    if (!file.IsIGZ() || file.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!ctr.ArchiveOf.TryGetValue(file, out string? archive)) continue;
+                    HashSet<string> dependencies;
+                    try
+                    {
+                        dependencies = RawDependencies(file.Uncompress());
+                    }
+                    catch (Exception e)
+                    {
+                        lines.Add($"dipendenze CTR non lette: {file.Path} ({e.Message})");
+                        continue;
+                    }
+                    Dictionary<string, List<IgArchiveFile>> names = ctr.Names(archive);
+                    foreach (string name in dependencies)
+                    {
+                        if (!names.TryGetValue(name, out List<IgArchiveFile>? found)) continue;
+                        foreach (IgArchiveFile dependency in found)
+                        {
+                            if (included.Contains(dependency.Path.ToLowerInvariant())) continue;
+                            // Un file che il gioco Crash ha gia' con lo stesso percorso resta il suo
+                            if (index.ContainsKey(dependency.Path.ToLowerInvariant())) continue;
+                            if (AddCtr(dependency, "dipendenze CTR aggiunte")) lines.Add($"dipendenza CTR: {dependency.Path} (da {file.Path})");
+                        }
+                    }
+                }
+                if (fromCtr.Count > 0)
+                {
+                    try
+                    {
+                        byte[] sample = fromCtr.First(f => f.IsIGZ()).Uncompress();
+                        report.AppendLine($"igz di CTR: versione {BitConverter.ToUInt32(sample, 4)}, piattaforma {BitConverter.ToUInt32(sample, 12)}, " +
+                                          $"hash dei campi 0x{BitConverter.ToUInt32(sample, 8):X8} (Crash Switch: versione 10, piattaforma 2)");
+                    }
+                    catch (Exception e)
+                    {
+                        report.AppendLine($"igz di CTR non leggibili: {e.Message}");
+                    }
+                }
+                else
+                {
+                    report.AppendLine("nessun file preso da CTR (la grafica che manca non e' nel dump CTR con lo stesso percorso)");
                 }
             }
 

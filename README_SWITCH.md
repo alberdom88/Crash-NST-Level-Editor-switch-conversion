@@ -50,7 +50,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
-        [--registra-in update|chunkinfos]
+        [--ctr <cartella_dump_ctr_switch>] [--registra-in update|chunkinfos]
         [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -120,6 +120,11 @@ Dettagli:
 - `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
   può ripetere). Per esempio `--escludi Octane` toglie gli asset importati da Crash Team Racing,
   che la Switch non ha: il livello si carica senza quella parte di grafica.
+- `--ctr <cartella>` (prova): dump di Crash Team Racing Nitro-Fueled per Switch. La grafica
+  che il gioco Crash non ha (asset CTR importati nell'editor) viene cercata lì con lo stesso
+  percorso (per i materiali anche con un suffisso diverso) e copiata nell'archivio, con le sue
+  dipendenze CTR. Non è detto che il gioco Crash sappia leggere i file di CTR: il rapporto
+  riporta versione e piattaforma dei loro igz.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
