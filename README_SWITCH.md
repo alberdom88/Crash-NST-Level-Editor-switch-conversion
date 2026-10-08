@@ -49,7 +49,8 @@ del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non 
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
-        [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--registra-in update|chunkinfos]
+        [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
+        [--registra-in update|chunkinfos]
         [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -89,8 +90,9 @@ Dettagli:
 
   La zone info (i dati del livello per il gioco: a quale gioco appartiene, nome mostrato nel
   caricamento, salvataggio...) viene presa da un livello originale Switch, cambiando solo il
-  nome: quella creata dall'editor, convertita, blocca il gioco all'avvio diretto. Il livello
-  nuovo mostra quindi nel caricamento il nome dell'originale e ne usa il salvataggio (vedi
+  nome e la voce di salvataggio: quella creata dall'editor, convertita, blocca il gioco
+  all'avvio diretto. Il livello nuovo appartiene allo stesso gioco dell'originale (Crash 1, 2
+  o 3) e ne eredita il resto, per esempio il nome mostrato nel caricamento (vedi
   `--zoneinfo-da` e `--salvataggio`). Le opzioni speciali dell'editor (personaggio, hub,
   veicoli) non sono ancora convertite.
 - `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
@@ -108,13 +110,16 @@ Dettagli:
   originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello dello
   stesso gioco (`L101_NSanityBeach`, `L201_TurtleWoods`, `L301_ToadVillage`). Con `pc` usa la
   zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto.
-- `--salvataggio` (con `--nuovo`): `originale` (predefinito, provato) usa la voce di
-  salvataggio del livello da cui viene la zone info, quindi gemme, casse e tempi del livello
-  nuovo finiscono su quel livello; `proprio` gli dà una voce nuova (da provare).
+- `--salvataggio` (con `--nuovo`): `proprio` (predefinito) dà al livello una voce di
+  salvataggio sua, con il suo nome; `originale` usa quella del livello da cui viene la zone
+  info (gemme, casse e tempi finiscono su quel livello).
 - `--registra-in` (con `--nuovo`, per le prove): dove registrare il livello. `update`
   (predefinito) scrive `update.pak` come l'editor PC; `chunkinfos` scrive invece una copia di
   `chunkInfos.pak` (l'archivio con le zone info di tutti i livelli del gioco) con dentro anche
   quella del livello nuovo: si installa al posto di `update.pak`.
+- `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
+  può ripetere). Per esempio `--escludi Octane` toglie gli asset importati da Crash Team Racing,
+  che la Switch non ha: il livello si carica senza quella parte di grafica.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;

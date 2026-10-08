@@ -60,9 +60,11 @@ namespace NST
             // --nuovo: livello originale Switch da cui prendere la zone info (cambia solo il nome); "pc" = quella
             // dell'editor convertita (non funziona: il gioco si blocca). Vuoto = scelta automatica
             public string? ZoneInfoFrom;
-            // --nuovo: "originale" = il livello usa la voce di salvataggio del livello da cui prende la zone info
-            // (provato); "proprio" = voce di salvataggio nuova con il nome del livello (da provare)
-            public string SaveMode = "originale";
+            // --nuovo: "proprio" = voce di salvataggio nuova con il nome del livello (provato con Level 3);
+            // "originale" = la voce di salvataggio del livello da cui viene la zone info
+            public string SaveMode = "proprio";
+            // converti: file del PC da non mettere nell'archivio (testo contenuto nel percorso, per esempio Octane)
+            public List<string> Exclude = [];
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
@@ -134,6 +136,7 @@ namespace NST
                 else if (name == "--zoneinfo-da" && hasValue) { options.ZoneInfoFrom = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--registra-in" && hasValue) { options.RegisterIn = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--salvataggio" && hasValue) { options.SaveMode = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
+                else if (name == "--escludi" && hasValue) { options.Exclude.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -146,7 +149,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1680,6 +1683,15 @@ namespace NST
 
                 try
                 {
+                    // --escludi: file lasciati fuori dall'archivio (e quindi dal pacchetto del livello)
+                    if (!path.StartsWith("update/", StringComparison.OrdinalIgnoreCase) &&
+                        options.Exclude.Any(x => path.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Increment(counters, "file esclusi (--escludi)");
+                        lines.Add($"escluso: {path}");
+                        continue;
+                    }
+
                     // Livello nuovo: la zone info e gli altri file update/ vanno in update.pak
                     if (options.NewLevel && path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1951,7 +1963,7 @@ namespace NST
                     report.AppendLine("--nuovo: zone info dell'editor convertita dal PC (--zoneinfo-da pc): il gioco potrebbe bloccarsi all'avvio diretto");
                 }
                 if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                       options.SaveMode == "proprio"))
+                                       options.SaveMode != "originale"))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2206,7 +2218,7 @@ namespace NST
                 report.AppendLine($"  zone info presa dall'originale Switch {template.Path}: nome {oldName} -> {levelId}, " +
                                   $"nome mostrato '{zoneInfo._displayName}' (come l'originale)");
                 report.AppendLine(ownSave
-                    ? $"  voce di salvataggio propria: '{zoneInfo._saveName}' (--salvataggio proprio, da provare)"
+                    ? $"  voce di salvataggio propria: '{zoneInfo._saveName}'"
                     : $"  voce di salvataggio: '{zoneInfo._saveName}', la stessa del livello originale (gemme e tempi finiscono li')");
             }
 
