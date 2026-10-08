@@ -59,6 +59,9 @@ namespace NST
             public string OtherLevels = "converti";
             // --nuovo: zone info presa da un livello originale Switch (cambia solo il nome), per le prove
             public string? ZoneInfoFrom;
+            // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
+            // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
+            public string RegisterIn = "update";
         }
 
         public static int Run(string[] args)
@@ -125,6 +128,7 @@ namespace NST
                 else if (name == "--base" && hasValue) { options.BaseLevel = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--altri-livelli" && hasValue) { options.OtherLevels = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--zoneinfo-da" && hasValue) { options.ZoneInfoFrom = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--registra-in" && hasValue) { options.RegisterIn = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -137,7 +141,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1912,10 +1916,18 @@ namespace NST
             string? updatePath = null;
             if (options.NewLevel && newPackage != null)
             {
-                updatePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", "update.pak");
+                // Archivio della registrazione: update.pak oppure chunkInfos.pak (con il nome che ha nel dump)
+                string registerIn = options.RegisterIn == "chunkinfos" ? "chunkinfos" : "update";
+                string registerFile = "update.pak";
+                if (registerIn == "chunkinfos")
+                {
+                    string? chunkInfosOriginal = PakFiles(switchDir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals("chunkinfos", StringComparison.OrdinalIgnoreCase));
+                    registerFile = chunkInfosOriginal != null ? Path.GetFileName(chunkInfosOriginal) : "chunkInfos.pak";
+                }
+                updatePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".", registerFile);
                 string levelId = (newPackage.Value.dir + "/" + newPackage.Value.name).ToLowerInvariant();
                 var embedded = new List<(string path, byte[] data)>();
-                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, options.ZoneInfoFrom))
+                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, options.ZoneInfoFrom, registerIn))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -1930,7 +1942,7 @@ namespace NST
                         copy.SetData(data);
                         output.AddFile(copy);
                     }
-                    report.AppendLine($"Installa insieme {Path.GetFileName(outputPath)} e update.pak (sostituisce l'originale); avvio diretto: {levelId}");
+                    report.AppendLine($"Installa insieme {Path.GetFileName(outputPath)} e {Path.GetFileName(updatePath)} (sostituisce l'originale); avvio diretto: {levelId}");
                     report.AppendLine("Con NST Pak Manager 1.7 basta il livello: update.pak lo crea l'app dai file update/ del livello");
                 }
                 report.AppendLine();
@@ -2064,10 +2076,10 @@ namespace NST
         /// </summary>
         private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
-                                              Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate)
+                                              Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
-            report.AppendLine("REGISTRAZIONE DEL LIVELLO (update.pak)");
+            report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
 
             // --zoneinfo-da: zone info di un livello originale Switch al posto di quella del PC
             IgArchiveFile? template = null;
@@ -2083,11 +2095,16 @@ namespace NST
             }
 
             IgArchive update = new IgArchive(updatePath, GameVersion.NSX);
-            if (sw.ByArchive.TryGetValue("update", out List<IgArchiveFile>? originals))
+            if (sw.ByArchive.TryGetValue(registerIn, out List<IgArchiveFile>? originals))
             {
                 foreach (IgArchiveFile file in originals) update.AddFile(file.Clone());
                 long size = originals.Sum(f => (long)f.GetData().Length);
-                report.AppendLine($"  update.pak originale Switch: {originals.Count} file ({size / 1024} KB)");
+                report.AppendLine($"  {registerIn}.pak originale Switch: {originals.Count} file ({size / 1024} KB)");
+            }
+            else if (registerIn == "chunkinfos")
+            {
+                report.AppendLine("  ERRORE: chunkInfos.pak non trovato nel dump");
+                return false;
             }
             else
             {

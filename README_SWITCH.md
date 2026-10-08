@@ -49,7 +49,7 @@ del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non 
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
-        [--zoneinfo-da <livello>] [--pc-originali <cartella_archives_pc>]
+        [--zoneinfo-da <livello>] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]
 ```
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
@@ -101,6 +101,10 @@ Dettagli:
 - `--zoneinfo-da <livello>` (con `--nuovo`, per le prove): invece della zone info del PC usa
   quella del livello originale Switch indicato (per esempio `L112_RoadToNowhere`), cambiando
   solo il nome. Il livello nuovo ne eredita nome mostrato e salvataggio.
+- `--registra-in` (con `--nuovo`, per le prove): dove registrare il livello. `update`
+  (predefinito) scrive `update.pak` come l'editor PC; `chunkinfos` scrive invece una copia di
+  `chunkInfos.pak` (l'archivio con le zone info di tutti i livelli del gioco) con dentro anche
+  quella del livello nuovo: si installa al posto di `update.pak`.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
