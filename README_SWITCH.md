@@ -49,7 +49,8 @@ del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non 
 NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt]
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
-        [--zoneinfo-da <livello>] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]
+        [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--registra-in update|chunkinfos]
+        [--pc-originali <cartella_archives_pc>]
 ```
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
@@ -86,8 +87,12 @@ Dettagli:
   - scrive anche `update.pak` accanto all'archivio (l'originale Switch più la
     registrazione), da usare **solo su Eden**, dove l'app non c'è.
 
-  Le opzioni speciali dell'editor (personaggio, hub, veicoli) non sono ancora convertite:
-  il rapporto lo segnala.
+  La zone info (i dati del livello per il gioco: a quale gioco appartiene, nome mostrato nel
+  caricamento, salvataggio...) viene presa da un livello originale Switch, cambiando solo il
+  nome: quella creata dall'editor, convertita, blocca il gioco all'avvio diretto. Il livello
+  nuovo mostra quindi nel caricamento il nome dell'originale e ne usa il salvataggio (vedi
+  `--zoneinfo-da` e `--salvataggio`). Le opzioni speciali dell'editor (personaggio, hub,
+  veicoli) non sono ancora convertite.
 - `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
   sostituisce, quindi si installa con il nome dell'archivio originale, in minuscolo come
   sulla Switch (`l112_roadtonowhere.pak`; l'app lo fa da sola, su Eden rinominalo così).
@@ -98,9 +103,14 @@ Dettagli:
   Con `--come-originale`, `--sostituisci` e con `--nuovo` per i livelli `..._Custom` si
   trova da solo.
 - `--senza-base`: non aggiunge gli asset dell'archivio Switch di partenza.
-- `--zoneinfo-da <livello>` (con `--nuovo`, per le prove): invece della zone info del PC usa
-  quella del livello originale Switch indicato (per esempio `L112_RoadToNowhere`), cambiando
-  solo il nome. Il livello nuovo ne eredita nome mostrato e salvataggio.
+- `--zoneinfo-da <livello>` (con `--nuovo`): livello originale Switch da cui prendere la zone
+  info. Senza l'opzione il convertitore sceglie da solo: per un livello creato da uno
+  originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello dello
+  stesso gioco (`L101_NSanityBeach`, `L201_TurtleWoods`, `L301_ToadVillage`). Con `pc` usa la
+  zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto.
+- `--salvataggio` (con `--nuovo`): `originale` (predefinito, provato) usa la voce di
+  salvataggio del livello da cui viene la zone info, quindi gemme, casse e tempi del livello
+  nuovo finiscono su quel livello; `proprio` gli dà una voce nuova (da provare).
 - `--registra-in` (con `--nuovo`, per le prove): dove registrare il livello. `update`
   (predefinito) scrive `update.pak` come l'editor PC; `chunkinfos` scrive invece una copia di
   `chunkInfos.pak` (l'archivio con le zone info di tutti i livelli del gioco) con dentro anche
