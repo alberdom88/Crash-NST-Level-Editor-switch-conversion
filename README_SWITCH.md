@@ -169,6 +169,12 @@ Dettagli:
   convertitore fa lo stesso (fino alla v30 li metteva nel pacchetto, e il gioco caricava quei
   livelli interi con tutte le loro entità: con Tell No Tales e Makin' Waves il caricamento si
   bloccava). Il rapporto li elenca come "fuori dal pacchetto".
+- `--solo-usati` (prova): dei file di altri livelli tiene solo gli oggetti che il livello usa
+  davvero (quelli a cui i suoi file fanno riferimento, con tutto quello a cui sono collegati) e
+  toglie dall'archivio modelli, materiali e texture che dopo non usa più nessun file. Il
+  rapporto ha due sezioni: `SOLO GLI OGGETTI USATI` (oggetti prima e dopo, file per file) e
+  `GRAFICA NON PIU' USATA` (quanti MB ha tolto). Se nel livello manca qualcosa o si blocca,
+  riconverti senza.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
