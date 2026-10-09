@@ -72,6 +72,9 @@ namespace NST
             // converti: aggiunge l'intro dei livelli di Crash 3 se il livello non ce l'ha (presa da Gone Tomorrow,
             // come fa l'editor); automatica con --gioco crash3 per un livello di un altro gioco
             public bool AddIntro;
+            // --nuovo: non riportare nella zone info presa da un originale la modalita' scelta nell'editor
+            // (personaggio, veicolo, opzioni speciali come {boulder} e i dati del personaggio che le attivano)
+            public bool WithoutMode;
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
@@ -152,6 +155,7 @@ namespace NST
                 else if (name == "--ctr" && hasValue) { options.CtrDump = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--senza-intro") { options.WithoutIntro = true; rest.RemoveAt(i); }
                 else if (name == "--aggiungi-intro") { options.AddIntro = true; rest.RemoveAt(i); }
+                else if (name == "--senza-modalita") { options.WithoutMode = true; rest.RemoveAt(i); }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
@@ -166,7 +170,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2232,7 +2236,7 @@ namespace NST
 
                 EGameYear? forcedYear = options.Game == null ? null : LevelBuilder.GetGameYear(options.Game);
                 if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                       options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom))
+                                       options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2393,7 +2397,7 @@ namespace NST
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
                                               bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
-                                              CZoneInfo? poolSource, string? poolFrom)
+                                              CZoneInfo? poolSource, string? poolFrom, bool editorMode)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -2429,6 +2433,7 @@ namespace NST
 
             // Zone info e altri file update/ del livello, convertiti
             var zoneInfos = new List<string>();
+            CZoneInfo? pcZoneInfo = null;  // zone info dell'editor, quando si usa quella di un originale
             foreach (IgArchiveFile file in updateFiles)
             {
                 string path = file.Path.Substring("update/".Length);
@@ -2442,7 +2447,11 @@ namespace NST
                     report.AppendLine($"  zone info del PC non usata ({path}): --zoneinfo-da {zoneInfoTemplate}");
                     try
                     {
-                        if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo pcZone) report.AppendLine("    PC: " + DescribeZoneInfo(pcZone));
+                        if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo pcZone)
+                        {
+                            report.AppendLine("    PC: " + DescribeZoneInfo(pcZone));
+                            pcZoneInfo = pcZone;
+                        }
                     }
                     catch (Exception e)
                     {
@@ -2516,6 +2525,11 @@ namespace NST
                     if (poolSource._levelPoolSize != null) zoneInfo._levelPoolSize._size = poolSource._levelPoolSize._size;
                     if (poolSource._globalChunkPoolSize != null) zoneInfo._globalChunkPoolSize._size = poolSource._globalChunkPoolSize._size;
                 }
+                // Modalita' scelta nell'editor (personaggio, veicolo, opzioni speciali): l'editor la mette nella sua zone
+                // info e, quando premi Play, crea i dati del personaggio che la attivano. Si fa lo stesso qui
+                if (editorMode && pcZoneInfo != null)
+                    ApplyEditorMode(zoneInfo, pcZoneInfo, levelId, sw, update, embedded, report);
+
                 // Zone info di Crash 3 presa da un livello originale con l'intro accesa: Crash non compariva (Oichi, v24);
                 // spenta, Crash compare e l'intro del livello (Crash che esce dal portale) parte lo stesso (v25)
                 if (zoneInfo._year == EGameYear.eGY_2017_Crash3 && zoneInfo._flags._magicMomentIntro)
@@ -2620,6 +2634,82 @@ namespace NST
             dependencies.RemoveAll(d => d.Path.Equals(sourceFile.Path, StringComparison.OrdinalIgnoreCase));
             info = $"da {sourceFile.Path}, {dependencies.Count} file collegati";
             return dependencies;
+        }
+
+        /// <summary>
+        /// Riporta nella zone info presa da un originale la modalita' impostata nell'editor: personaggio (Coco), opzioni
+        /// speciali di _build ({boulder}, {hog}, {jetski}, ...), veicolo (moto d'acqua, aereo). Per le opzioni che lo
+        /// richiedono crea, come l'editor quando premi Play, i dati del personaggio (Crash/Coco_CharacterData.igz,
+        /// dal dump Switch) che collegano la modalita' alla zone info del livello, e li mette nella registrazione.
+        /// </summary>
+        private static void ApplyEditorMode(CZoneInfo zoneInfo, CZoneInfo pcZone, string levelId, ArchiveIndex sw, IgArchive update,
+                                            List<(string path, byte[] data)> embedded, StringBuilder report)
+        {
+            List<string> options = GameplayModeManager.GetSpecialZoneInfoOptions(pcZone._build);
+            string? character = string.IsNullOrEmpty(pcZone._overrideCharacter) || pcZone._overrideCharacter == "Crash" ? null : pcZone._overrideCharacter;
+            if (options.Count == 0 && character == null) return;
+
+            if (character != null && zoneInfo._overrideCharacter != character)
+            {
+                report.AppendLine($"  personaggio dell'editor: {character}");
+                zoneInfo._overrideCharacter = character;
+            }
+            if (options.Count > 0)
+            {
+                zoneInfo._build = GameplayModeManager.UpdateSpecialZoneInfoOptions(zoneInfo._build, options);
+                zoneInfo._zoneVehicle = options.Contains("jetski") ? "CocoJetski" : options.Contains("plane") ? "CrashCocoPlane" : zoneInfo._zoneVehicle;
+                report.AppendLine($"  modalita' dell'editor: {string.Join(", ", options)} (build '{zoneInfo._build}', veicolo '{zoneInfo._zoneVehicle}')");
+            }
+
+            string[] characterOptions = ["hog", "bear", "tiger", "jetpack", "dig", "boulder"];
+            List<string> needData = options.Where(o => characterOptions.Contains(o)).ToList();
+            if (options.Contains("hub")) report.AppendLine("  ATTENZIONE: l'opzione hub non viene convertita (servono i dati di sistema del gioco)");
+            if (needData.Count == 0) return;
+
+            string name = (character ?? "Crash") + "_CharacterData.igz";
+            IgArchiveFile? source = sw.ByPath.Where(e => NamespaceUtils.GetFileName(e.Key).Equals(name, StringComparison.OrdinalIgnoreCase))
+                                             .Select(e => e.Value).FirstOrDefault();
+            if (source == null)
+            {
+                report.AppendLine($"  ERRORE: {name} non trovato nel dump: la modalita' {string.Join(", ", needData)} non si attiva");
+                return;
+            }
+            try
+            {
+                IgzFile igz = source.ToIgzFile();
+                string zoneInfoName = levelId.Substring(levelId.LastIndexOf('/') + 1) + "_zoneinfo";
+                var done = new List<string>();
+                foreach (string option in needData)
+                {
+                    NamedReference? reference = option switch
+                    {
+                        "hog" => igz.FindObject<Crash_Ride_HogData>()?._Zone_Info_0x78.Reference,
+                        "bear" => igz.FindObject<Crash_Ride_BearData>()?._Zone_Info_0xb0.Reference,
+                        "tiger" => igz.FindObject<Crash_Ride_TigerData>()?._Zone_Info_0x80.Reference,
+                        "jetpack" => igz.FindObjects<Crash_JetPackData>().LastOrDefault()?._Zone_Info_0x138.Reference,
+                        "dig" => igz.FindObject<Crash_DiggingData>()?._Zone_Info_0x80.Reference,
+                        "boulder" => igz.FindObject<Crash_BoulderData>()?._Zone_Info_0x88.Reference,
+                        _ => null
+                    };
+                    if (reference == null)
+                    {
+                        report.AppendLine($"  ATTENZIONE: {option}: dati non trovati in {source.Path}");
+                        continue;
+                    }
+                    reference.namespaceName = zoneInfoName;
+                    done.Add(option);
+                }
+                if (done.Count == 0) return;
+                igz.GameVersion = GameVersion.NSX;
+                byte[] data = igz.Save();
+                ReplaceFile(update, source.Path, data);
+                embedded.Add((source.Path, data));
+                report.AppendLine($"  dati del personaggio per {string.Join(", ", done)}: {source.Path} (collegati a {zoneInfoName})");
+            }
+            catch (Exception e)
+            {
+                report.AppendLine($"  ERRORE dati del personaggio ({source.Path}): {e.GetType().Name}: {e.Message}");
+            }
         }
 
         /// <summary>

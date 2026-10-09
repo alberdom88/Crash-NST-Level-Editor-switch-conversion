@@ -94,8 +94,13 @@ Dettagli:
   nome e la voce di salvataggio: quella creata dall'editor, convertita, blocca il gioco
   all'avvio diretto. Il livello nuovo appartiene allo stesso gioco dell'originale (Crash 1, 2
   o 3) e ne eredita il resto, per esempio il nome mostrato nel caricamento (vedi
-  `--zoneinfo-da` e `--salvataggio`). Le opzioni speciali dell'editor (personaggio, hub,
-  veicoli) non sono ancora convertite.
+  `--zoneinfo-da` e `--salvataggio`). La modalità scelta nell'editor viene riportata nella
+  zone info: personaggio (Coco), opzioni speciali (`{boulder}`, `{hog}`, `{jetski}`, ...) e
+  veicolo; per masso, cavalcature, jetpack e scavo il convertitore crea anche, come l'editor
+  quando premi Play, i dati del personaggio (`Crash_CharacterData.igz` o
+  `Coco_CharacterData.igz` dal dump Switch) collegati al livello, e li mette nella
+  registrazione. L'opzione hub non è convertita. `--senza-modalita` lascia la zone info
+  dell'originale com'è (per le prove).
 - `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
   sostituisce, quindi si installa con il nome dell'archivio originale, in minuscolo come
   sulla Switch (`l112_roadtonowhere.pak`; l'app lo fa da sola, su Eden rinominalo così).
