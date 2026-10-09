@@ -1720,6 +1720,25 @@ namespace NST
             var registration = new List<IgArchiveFile>();
             var otherLevelOriginals = new HashSet<IgArchiveFile>();
             var entityLines = new List<string>();
+
+            // File elencati nel pacchetto del livello PC (con i nomi rinominati). L'editor, quando prendi un oggetto da
+            // un altro livello, copia nell'archivio l'intero file di quel livello (maps/...) ma NON lo mette nel
+            // pacchetto: il gioco lo usa solo per gli oggetti presi, senza caricare tutto quello che contiene
+            var pcPackageList = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (pc.Files.FirstOrDefault(f => PackageInfo(f.Path) != null) is IgArchiveFile pcPackage)
+            {
+                try
+                {
+                    foreach (igStreamingChunkInfo info in pcPackage.ToIgzFile().Objects.OfType<igStreamingChunkInfo>())
+                        foreach (ChunkFileInfoMetaField entry in info._required._data)
+                            if (entry._name != null) pcPackageList.Add(rename != null ? rename.Apply(entry._name) : entry._name);
+                }
+                catch (Exception e)
+                {
+                    report.AppendLine($"pacchetto del livello PC non leggibile ({e.Message}): tutti i file finiscono nel pacchetto");
+                    pcPackageList.Clear();
+                }
+            }
             bool levelHasC3Intro = false;
             int done = 0;
 
@@ -2129,7 +2148,9 @@ namespace NST
                 }
             }
 
-            // The package file must list exactly the files of the archive
+            // Il pacchetto elenca i file del livello, come quello del PC: i file di altri livelli (maps/...) che l'editor
+            // copia per gli oggetti presi da li' restano fuori. Nel pacchetto il gioco li caricherebbe interi, con tutte
+            // le loro entita' (quelli dei livelli con la moto d'acqua bloccano il caricamento: Tropical Escape)
             try
             {
                 if (output.FindPackageFile() == null)
@@ -2138,8 +2159,21 @@ namespace NST
                 }
                 else
                 {
-                    output.RebuildPackageFile(output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList(), out _);
+                    string? ownDir = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir;
+                    bool InPackage(string p) =>
+                        pcPackageList.Count == 0 ||
+                        !p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) ||
+                        pcPackageList.Contains(p) ||
+                        (ownDir != null && p.StartsWith("maps/" + ownDir + "/", StringComparison.OrdinalIgnoreCase));
+                    var levelFiles = output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
+                    var outside = levelFiles.Where(f => !InPackage(f.Path)).ToList();
+                    output.RebuildPackageFile(levelFiles.Where(f => InPackage(f.Path)).ToList(), out _);
                     Increment(counters, "file del pacchetto aggiornato");
+                    if (outside.Count > 0)
+                    {
+                        counters["file di altri livelli fuori dal pacchetto (come nell'editor)"] = outside.Count;
+                        foreach (IgArchiveFile f in outside) lines.Add($"fuori dal pacchetto (usato solo per gli oggetti presi): {f.Path}");
+                    }
                 }
             }
             catch (Exception e)
@@ -2794,7 +2828,8 @@ namespace NST
                 report.AppendLine($"  {Mb((ulong)size),10}  {group}");
             int otherLevels = groups.Keys.Count(k => k.StartsWith("altro livello: "));
             if (otherLevels > 0)
-                report.AppendLine($"  ({otherLevels} altri livelli: l'editor copia per intero i file da cui prendi anche un solo oggetto)");
+                report.AppendLine($"  ({otherLevels} altri livelli: l'editor copia per intero i file da cui prendi anche un solo oggetto; quelli in maps/ " +
+                                  "restano fuori dal pacchetto, come nell'editor)");
             report.AppendLine("File piu' grandi:");
             foreach (IgArchiveFile f in files.OrderByDescending(x => x.UncompressedSize).Take(10))
                 report.AppendLine($"  {Mb((ulong)f.UncompressedSize),10}  {f.Path}");

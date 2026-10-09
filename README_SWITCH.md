@@ -163,6 +163,12 @@ Dettagli:
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
   esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
   non parte, Crash non compare e non si può muovere.
+- File di altri livelli: quando usi un oggetto di un altro livello l'editor copia nell'archivio
+  l'intero file da cui viene (per esempio `maps/Crash3/L318_TellNoTales/L318_TellNoTales.igz`),
+  ma non lo mette nel pacchetto del livello: il gioco lo usa solo per gli oggetti presi. Il
+  convertitore fa lo stesso (fino alla v30 li metteva nel pacchetto, e il gioco caricava quei
+  livelli interi con tutte le loro entità: con Tell No Tales e Makin' Waves il caricamento si
+  bloccava). Il rapporto li elenca come "fuori dal pacchetto".
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
