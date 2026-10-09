@@ -164,17 +164,19 @@ Dettagli:
   esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
   non parte, Crash non compare e non si può muovere.
 - File di altri livelli: quando usi un oggetto di un altro livello l'editor copia nell'archivio
-  l'intero file da cui viene (per esempio `maps/Crash3/L318_TellNoTales/L318_TellNoTales.igz`),
-  ma non lo mette nel pacchetto del livello: il gioco lo usa solo per gli oggetti presi. Il
-  convertitore fa lo stesso (fino alla v30 li metteva nel pacchetto, e il gioco caricava quei
-  livelli interi con tutte le loro entità: con Tell No Tales e Makin' Waves il caricamento si
-  bloccava). Il rapporto li elenca come "fuori dal pacchetto".
-- `--solo-usati` (prova): dei file di altri livelli tiene solo gli oggetti che il livello usa
-  davvero (quelli a cui i suoi file fanno riferimento, con tutto quello a cui sono collegati) e
-  toglie dall'archivio modelli, materiali e texture che dopo non usa più nessun file. Il
-  rapporto ha due sezioni: `SOLO GLI OGGETTI USATI` (oggetti prima e dopo, file per file) e
-  `GRAFICA NON PIU' USATA` (quanti MB ha tolto). Se nel livello manca qualcosa o si blocca,
-  riconverti senza.
+  l'intero file da cui viene (per esempio `maps/Crash3/L318_TellNoTales/L318_TellNoTales.igz`).
+  Il convertitore mette nel pacchetto del livello (l'elenco dei file che il gioco carica come
+  parte del livello, con tutte le loro entità) solo quelli che c'erano nel pacchetto del PC; gli
+  altri restano nell'archivio e il rapporto li elenca come "fuori dal pacchetto". Alcuni livelli
+  (Tropical Escape) hanno nel pacchetto PC anche i file interi di altri livelli: lì serve
+  `--solo-usati`.
+- `--solo-usati` (prova): dei file di altri livelli (quelli in `maps/` fuori dalla cartella
+  del livello) tiene solo gli oggetti che il livello usa davvero, cioè quelli a cui i suoi file
+  fanno riferimento, con tutto quello a cui sono collegati. Un file di cui non usa nessun
+  oggetto esce dal pacchetto. Poi toglie dall'archivio i file che nessun file del livello usa
+  più: file di altri livelli, modelli, materiali e texture. Il rapporto ha due sezioni:
+  `SOLO GLI OGGETTI USATI` (oggetti prima e dopo, file per file) e `FILE NON PIU' USATI`
+  (quanti MB ha tolto). Se nel livello manca qualcosa o si blocca, riconverti senza.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;

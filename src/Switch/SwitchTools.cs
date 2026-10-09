@@ -1752,10 +1752,11 @@ namespace NST
 
             // --solo-usati: dei file di altri livelli si tengono solo gli oggetti che il livello usa
             var prunedFiles = new Dictionary<string, IgzFile>(StringComparer.OrdinalIgnoreCase);
+            var unusedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // nessun oggetto usato (percorsi di uscita)
             if (options.OnlyUsed)
             {
-                if (pcPackageOriginal.Count == 0) report.AppendLine("--solo-usati: pacchetto del livello PC non letto, niente sfoltimento");
-                else PruneOtherLevelFiles(pc, pcPackageOriginal, prunedFiles, report);
+                PruneOtherLevelFiles(pc, levelDirs, prunedFiles, unusedOtherFiles, report);
+                if (rename != null) unusedOtherFiles = unusedOtherFiles.Select(rename.Apply).ToHashSet(StringComparer.OrdinalIgnoreCase);
             }
             bool levelHasC3Intro = false;
             int done = 0;
@@ -2167,8 +2168,14 @@ namespace NST
             }
 
             // --solo-usati: modelli, materiali e texture che dopo lo sfoltimento non usa piu' nessun file del livello
-            if (options.OnlyUsed && prunedFiles.Count > 0)
-                RemoveUnusedGraphics(output, report);
+            if (options.OnlyUsed && (prunedFiles.Count > 0 || unusedOtherFiles.Count > 0))
+            {
+                // Cartelle del livello: quella di uscita e quelle del PC (i file dell'originale di un livello
+                // ..._Custom presi dalla Switch tengono la cartella dell'originale)
+                var ownDirs = new List<string>(levelDirs);
+                if (output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir is string outDir) ownDirs.Add(outDir);
+                RemoveUnusedFiles(output, ownDirs, report);
+            }
 
             // Il pacchetto elenca i file del livello, come quello del PC: i file di altri livelli (maps/...) che l'editor
             // copia per gli oggetti presi da li' restano fuori. Nel pacchetto il gioco li caricherebbe interi, con tutte
@@ -2182,11 +2189,13 @@ namespace NST
                 else
                 {
                     string? ownDir = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir;
+                    // --solo-usati: i file di altri livelli di cui il livello non usa nessun oggetto restano fuori
                     bool InPackage(string p) =>
-                        pcPackageList.Count == 0 ||
-                        !p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) ||
-                        pcPackageList.Contains(p) ||
-                        (ownDir != null && p.StartsWith("maps/" + ownDir + "/", StringComparison.OrdinalIgnoreCase));
+                        !unusedOtherFiles.Contains(p) &&
+                        (pcPackageList.Count == 0 ||
+                         !p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) ||
+                         pcPackageList.Contains(p) ||
+                         (ownDir != null && p.StartsWith("maps/" + ownDir + "/", StringComparison.OrdinalIgnoreCase)));
                     var levelFiles = output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
                     var outside = levelFiles.Where(f => !InPackage(f.Path)).ToList();
                     output.RebuildPackageFile(levelFiles.Where(f => InPackage(f.Path)).ToList(), out _);
@@ -2769,12 +2778,14 @@ namespace NST
         }
 
         /// <summary>
-        /// --solo-usati: nei file di altri livelli (maps/ fuori dal pacchetto del livello PC) tiene solo gli oggetti
+        /// --solo-usati: nei file di altri livelli (maps/ fuori dalle cartelle del livello) tiene solo gli oggetti
         /// raggiungibili dai riferimenti (handle) dei file del livello, con tutto quello a cui sono collegati, anche
-        /// in altri file di altri livelli. Un file referenziato senza un oggetto preciso, o senza riferimenti
-        /// (solo come dipendenza), resta intero. I file sfoltiti finiscono in result (percorso PC -> igz).
+        /// in altri file di altri livelli. Un file referenziato senza un oggetto preciso resta intero; uno di cui il
+        /// livello non usa nessun oggetto finisce in unused (resta solo come dipendenza, fuori dal pacchetto).
+        /// I file sfoltiti finiscono in result (percorso PC -> igz).
         /// </summary>
-        private static void PruneOtherLevelFiles(IgArchive pc, HashSet<string> packageList, Dictionary<string, IgzFile> result, StringBuilder report)
+        private static void PruneOtherLevelFiles(IgArchive pc, List<string> levelDirs, Dictionary<string, IgzFile> result,
+                                                 HashSet<string> unused, StringBuilder report)
         {
             var roots = new List<IgzFile>();
             var candidates = new Dictionary<string, (IgArchiveFile file, IgzFile igz)>(StringComparer.OrdinalIgnoreCase);
@@ -2791,7 +2802,9 @@ namespace NST
                     report.AppendLine($"--solo-usati: {f.Path} non leggibile ({e.Message}): niente sfoltimento");
                     return;
                 }
-                if (packageList.Contains(f.Path)) roots.Add(igz);
+                string[] parts = f.Path.Split('/');
+                bool own = parts.Length >= 4 && levelDirs.Any(d => d.Equals(parts[1] + "/" + parts[2], StringComparison.OrdinalIgnoreCase));
+                if (own) roots.Add(igz);
                 else candidates[NamespaceUtils.GetFileName(f.Path, false)] = (f, igz);
             }
             report.AppendLine("=== SOLO GLI OGGETTI USATI (--solo-usati) ===");
@@ -2854,9 +2867,15 @@ namespace NST
             {
                 IgzFile igz = entry.igz;
                 int before = igz.Objects.Count;
-                if (keepAll.Contains(ns) || keep[ns].Count == 0)
+                if (keepAll.Contains(ns))
                 {
-                    report.AppendLine($"  intero ({(keepAll.Contains(ns) ? "usato come file" : "nessun oggetto usato direttamente")}): {entry.file.Path} ({before} oggetti)");
+                    report.AppendLine($"  intero (usato come file): {entry.file.Path} ({before} oggetti)");
+                    continue;
+                }
+                if (keep[ns].Count == 0)
+                {
+                    unused.Add(entry.file.Path);
+                    report.AppendLine($"  nessun oggetto usato, fuori dal pacchetto: {entry.file.Path} ({before} oggetti)");
                     continue;
                 }
                 // Gli oggetti tenuti si riferiscono solo ad altri oggetti tenuti: si tolgono tutti gli altri
@@ -2873,48 +2892,55 @@ namespace NST
         }
 
         /// <summary>
-        /// --solo-usati: toglie dall'archivio modelli, materiali e texture (igz in models/, materialinstances/,
-        /// textures/, loosetextures/) che nessun altro file dell'archivio usa (dipendenze, handle e testi degli igz).
-        /// Se un file non si legge non toglie niente.
+        /// --solo-usati: toglie dall'archivio i file che nessun altro file del livello usa (dipendenze, handle e testi
+        /// degli igz): modelli, materiali e texture (igz in models/, materialinstances/, textures/, loosetextures/) e
+        /// file di altri livelli (maps/ fuori dalla cartella del livello). Tutti gli altri file restano e fanno da
+        /// punto di partenza. Se un file non si legge non toglie niente.
         /// </summary>
-        private static void RemoveUnusedGraphics(IgArchive output, StringBuilder report)
+        private static void RemoveUnusedFiles(IgArchive output, List<string> ownDirs, StringBuilder report)
         {
-            static bool IsGraphicsAsset(IgArchiveFile asset) =>
-                asset.IsIGZ() && (asset.Path.StartsWith("models/", StringComparison.OrdinalIgnoreCase) ||
-                                  asset.Path.StartsWith("materialinstances/", StringComparison.OrdinalIgnoreCase) ||
-                                  asset.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) ||
-                                  asset.Path.StartsWith("loosetextures/", StringComparison.OrdinalIgnoreCase));
+            bool Removable(IgArchiveFile file)
+            {
+                string p = file.Path;
+                if (p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase))
+                    return file.IsIGZ() && !ownDirs.Any(d => p.StartsWith("maps/" + d + "/", StringComparison.OrdinalIgnoreCase));
+                return file.IsIGZ() && (p.StartsWith("models/", StringComparison.OrdinalIgnoreCase) ||
+                                        p.StartsWith("materialinstances/", StringComparison.OrdinalIgnoreCase) ||
+                                        p.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) ||
+                                        p.StartsWith("loosetextures/", StringComparison.OrdinalIgnoreCase));
+            }
 
             var files = output.Files.Where(x => !x.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
             var byName = new Dictionary<string, List<IgArchiveFile>>();
-            foreach (IgArchiveFile f in files)
+            foreach (IgArchiveFile file in files)
             {
-                string name = NamespaceUtils.GetFileName(f.Path, false).ToLowerInvariant();
+                string name = NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant();
                 if (!byName.TryGetValue(name, out List<IgArchiveFile>? list)) byName[name] = list = [];
-                list.Add(f);
+                list.Add(file);
             }
 
+            // Il pacchetto elenca tutti i file: non conta come uso (si ricostruisce dopo con i file rimasti)
             var deps = new Dictionary<IgArchiveFile, HashSet<string>>();
-            foreach (IgArchiveFile f in files.Where(x => x.IsIGZ()))
+            foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase)))
             {
                 try
                 {
-                    deps[f] = f.ToIgzFile().GetDependencies(GameVersion.NSX);
+                    deps[file] = file.ToIgzFile().GetDependencies(GameVersion.NSX);
                 }
                 catch (Exception e)
                 {
-                    report.AppendLine($"--solo-usati: {f.Path} non leggibile ({e.Message}): la grafica resta tutta");
+                    report.AppendLine($"--solo-usati: {file.Path} non leggibile ({e.Message}): non tolgo nessun file");
                     report.AppendLine();
                     return;
                 }
             }
 
-            var reached = new HashSet<IgArchiveFile>(files.Where(x => !IsGraphicsAsset(x)));
+            var reached = new HashSet<IgArchiveFile>(files.Where(x => !Removable(x)));
             var queue = new Queue<IgArchiveFile>(reached);
             while (queue.Count > 0)
             {
-                IgArchiveFile f = queue.Dequeue();
-                if (!deps.TryGetValue(f, out HashSet<string>? names)) continue;
+                IgArchiveFile file = queue.Dequeue();
+                if (!deps.TryGetValue(file, out HashSet<string>? names)) continue;
                 foreach (string name in names)
                     if (byName.TryGetValue(name, out List<IgArchiveFile>? targets))
                         foreach (IgArchiveFile target in targets)
@@ -2923,11 +2949,13 @@ namespace NST
 
             var unused = files.Where(x => !reached.Contains(x)).ToList();
             long bytes = unused.Sum(x => (long)x.UncompressedSize);
-            foreach (IgArchiveFile f in unused) output.RemoveFile(f);
-            report.AppendLine("=== GRAFICA NON PIU' USATA (--solo-usati) ===");
-            report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) di modelli, materiali e texture che nessun file del livello usa");
-            foreach (IgArchiveFile f in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
-                report.AppendLine($"  {Mb((ulong)f.UncompressedSize),10}  {f.Path}");
+            foreach (IgArchiveFile file in unused) output.RemoveFile(file);
+            report.AppendLine("=== FILE NON PIU' USATI (--solo-usati) ===");
+            report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) che nessun file del livello usa: " +
+                              $"{unused.Count(x => x.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase))} di altri livelli, " +
+                              $"gli altri modelli, materiali e texture");
+            foreach (IgArchiveFile file in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
+                report.AppendLine($"  {Mb((ulong)file.UncompressedSize),10}  {file.Path}");
             if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20}");
             report.AppendLine();
         }
