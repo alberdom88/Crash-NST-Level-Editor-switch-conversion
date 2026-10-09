@@ -117,17 +117,20 @@ Dettagli:
   che non c'è e Crash non compare. Se Crash continua a non comparire,
   `--zoneinfo-da L101_NSanityBeach` funziona (il livello segue però le regole di Crash 1).
 - `--gioco crash1|crash2|crash3` (con `--nuovo`): il livello si gioca con le regole di quel gioco
-  (mosse, interfaccia, reliquie), qualunque gioco fosse impostato nell'editor. È quello che fa
-  "Crash Mode" nell'editor: cambia il gioco (anno) della zone info, presa dal primo livello di
-  quel gioco (`L301_ToadVillage` per Crash 3) o, per un livello `..._Custom`, dal suo originale.
-  Gli oggetti del livello restano quelli che sono. Per un livello che nell'editor era di Crash 1
-  o 2, `--gioco crash3` aggiunge anche l'intro di Crash 3 (vedi `--aggiungi-intro`).
+  (mosse, interfaccia, reliquie), qualunque gioco fosse impostato nell'editor. Il livello passa
+  nella cartella di quel gioco (`crash3/<livello>/<livello>`) e prende la zone info del primo
+  livello di quel gioco (`L301_ToadVillage` per Crash 3); un livello `..._Custom` tiene quella del
+  suo originale solo se è dello stesso gioco (con la zone info di Road to Nowhere passata a
+  Crash 3 il gioco si bloccava sul titolo). Gli oggetti del livello restano quelli che sono. Per
+  un livello che nell'editor era di Crash 1 o 2, `--gioco crash3` aggiunge anche l'intro di
+  Crash 3 (vedi `--aggiungi-intro`). Le mosse di Crash 3 (doppio salto, scatto, ...) dipendono
+  dai boss battuti nel salvataggio.
 - `--memoria modello|max|<livello>` (con `--nuovo`): dimensione delle aree di memoria del livello
   nella zone info (`_levelPoolSize` e `_globalChunkPoolSize`). Con `modello` (predefinito) sono
   quelle del livello originale da cui viene la zone info; con `max` quelle del livello originale
-  che ne ha di più; con il nome di un livello originale quelle di quel livello. Da provare se un
-  livello grande rallenta o si chiude sulla Switch: la sezione `MEMORIA` del rapporto dice quanto
-  pesa.
+  che ne ha di più; con il nome di un livello originale quelle di quel livello. Nel dump della
+  versione 1.0.0 tutti i livelli hanno gli stessi valori (200 MB e 30 MB), quindi in pratica non
+  cambia nulla.
 - `--salvataggio` (con `--nuovo`): `proprio` (predefinito) dà al livello una voce di
   salvataggio sua, con il suo nome; `originale` usa quella del livello da cui viene la zone
   info (gemme, casse e tempi finiscono su quel livello).
@@ -138,7 +141,9 @@ Dettagli:
 - `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
   può ripetere). Per esempio `--escludi Octane` toglie gli asset importati da Crash Team Racing,
   che la Switch non ha: il livello si carica senza quella parte di grafica.
-- `--ctr <cartella>` (prova): dump di Crash Team Racing Nitro-Fueled per Switch. La grafica
+- `--ctr <cartella>` (**non usarlo**: nelle prove blocca il gioco al caricamento, perché i
+  modelli di CTR usano file che Crash non ha, `vertexformat` e `indexformats`): dump di Crash
+  Team Racing Nitro-Fueled per Switch. La grafica
   che il gioco Crash non ha (asset CTR importati nell'editor) viene cercata lì con lo stesso
   percorso o lo stesso nome di file (per i materiali anche con un suffisso diverso) e copiata
   nell'archivio, con le sue
@@ -194,20 +199,18 @@ non è quello giusto; sulla Switch NST Pak Manager (1.8.1 o successivo) lo siste
 
 ### Livelli grandi
 
-La Switch ha molta meno memoria e potenza del PC, e ogni livello originale ha aree di memoria
-dimensionate per il suo contenuto. Un livello fatto sul PC può superarle:
-
-- l'editor copia per intero i file degli altri livelli da cui prendi oggetti, anche uno solo:
-  un livello con oggetti di dieci livelli carica la grafica di dieci livelli;
-- la zone info presa da un livello originale porta la memoria di quel livello.
+La Switch ha molta meno memoria e potenza del PC. Un livello fatto sul PC può pesare molto più
+di quelli originali, soprattutto perché l'editor copia per intero i file degli altri livelli da
+cui prendi oggetti, anche uno solo: un livello con oggetti di dieci livelli carica la grafica di
+dieci livelli.
 
 La sezione `MEMORIA` del rapporto dice quanto pesa il livello, quanto ne arriva da altri livelli
 e quali file sono più grandi, e lo confronta con il livello originale da cui viene la zone info
 e con i livelli originali più grandi. Se il livello è molto più grande:
 
-1. prova `--memoria max`: a volte basta se il livello si chiude o si blocca;
-2. nell'editor usa oggetti di meno livelli diversi (meglio dallo stesso gioco o dal livello
-   di partenza) e togli quelli che non servono.
+nell'editor usa oggetti di meno livelli diversi (meglio dallo stesso gioco o dal livello di
+partenza) e togli quelli che non servono. Le aree di memoria della zone info sono le stesse per
+tutti i livelli originali (200 MB e 30 MB), quindi `--memoria` non aiuta.
 
 I rallentamenti dovuti a troppi oggetti, luci o effetti non si risolvono con la memoria: vanno
 alleggeriti nell'editor.

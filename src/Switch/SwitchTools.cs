@@ -1513,6 +1513,8 @@ namespace NST
             ArchiveIndex? ctr = null;
             if (options.CtrDump != null)
             {
+                Console.WriteLine("ATTENZIONE: --ctr nelle prove blocca il gioco (i modelli di CTR usano file che Crash non ha): non usarlo per i livelli da giocare");
+                report.AppendLine("ATTENZIONE: --ctr nelle prove blocca il gioco al caricamento (i modelli di CTR usano vertexformat/indexformats, che Crash non ha)");
                 Console.WriteLine("Indicizzo gli archivi di Crash Team Racing...");
                 var ctrErrors = new List<string>();
                 ctr = ArchiveIndex.Build(options.CtrDump, ctrErrors);
@@ -1599,10 +1601,19 @@ namespace NST
                                           $"Usa --come-originale o --sostituisci, oppure salvalo nell'editor con un nome nuovo.");
                         return 1;
                     }
-                    string game = newPackage.Value.dir.Split('/')[0];
+                    string game = GameFolder(options.Game) ?? newPackage.Value.dir.Split('/')[0];
                     rename = new LevelRename { FromName = pcName, ToName = requested, FromDir = newPackage.Value.dir, ToDir = game + "/" + requested };
                     newPackage = (game + "/" + requested, requested);
                     report.AppendLine($"--nuovo: il livello prende il nome indicato: {rename}");
+                }
+                else if (GameFolder(options.Game) is string gameFolder &&
+                         !newPackage.Value.dir.Split('/')[0].Equals(gameFolder, StringComparison.OrdinalIgnoreCase))
+                {
+                    // --gioco: stesso nome, cartella del gioco scelto
+                    string toDir = gameFolder + "/" + newPackage.Value.dir.Split('/')[1];
+                    rename = new LevelRename { FromName = pcName, ToName = pcName, FromDir = newPackage.Value.dir, ToDir = toDir };
+                    newPackage = (toDir, pcName);
+                    report.AppendLine($"--gioco: il livello passa nella cartella del gioco scelto: {rename}");
                 }
                 else if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -1898,7 +1909,8 @@ namespace NST
                         }
 
                         // Diagnosi: entita' del file principale del livello (nome, tipo, componenti)
-                        if (levels.Any(l => NamespaceUtils.GetFileName(path, false).Equals(l, StringComparison.OrdinalIgnoreCase)))
+                        bool mainFile = IsMainLevelFile(path, levels, levelDirs);
+                        if (mainFile)
                         {
                             foreach (igEntity entity in igz.Objects.OfType<igEntity>())
                             {
@@ -1931,7 +1943,6 @@ namespace NST
                         string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
 
                         // Intro di Crash 3 aggiunta al file principale del livello (copiata da Gone Tomorrow della Switch)
-                        bool mainFile = levels.Any(l => NamespaceUtils.GetFileName(path, false).Equals(l, StringComparison.OrdinalIgnoreCase));
                         if (addIntro && mainFile && !hasIntro && !levelHasC3Intro)
                         {
                             try
@@ -2166,7 +2177,20 @@ namespace NST
                                       : pcYear == EGameYear.eGY_2017_Crash2 ? "crash2"
                                       : pcYear == EGameYear.eGY_2017_Crash3 ? "crash3" : game);
                     string gameDefault = yearGame == "crash2" ? "L201_TurtleWoods" : yearGame == "crash3" ? "L301_ToadVillage" : "L101_NSanityBeach";
-                    zoneTemplate = detectedBase != null && FindZoneInfo(sw, detectedBase.Value.to) != null ? detectedBase.Value.to : gameDefault;
+                    string? baseTemplate = detectedBase != null && FindZoneInfo(sw, detectedBase.Value.to) != null ? detectedBase.Value.to : null;
+                    if (baseTemplate != null && options.Game != null)
+                    {
+                        // Zone info di un livello di un altro gioco con l'anno cambiato: il gioco si blocca sul titolo
+                        // (Level 3, L112 come Crash 3); si usa quella del primo livello del gioco scelto
+                        string[] baseParts = FindZoneInfo(sw, baseTemplate)!.Path.Split('/');
+                        string baseGame = baseParts.Length > 1 ? baseParts[1].ToLowerInvariant() : "";
+                        if (baseGame != options.Game)
+                        {
+                            report.AppendLine($"--gioco {options.Game}: {baseTemplate} e' di {baseGame}, zone info presa da {gameDefault}");
+                            baseTemplate = null;
+                        }
+                    }
+                    zoneTemplate = baseTemplate ?? gameDefault;
                     report.AppendLine($"--nuovo: zone info presa da {zoneTemplate} (scelta automatica; per cambiarla --zoneinfo-da <livello>)");
                     if (options.Game != null) report.AppendLine($"  gioco scelto con --gioco: {options.Game}, cartella del livello: {game}");
                     else if (pcYear != null) report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {yearGame}, cartella del livello: {game}");
@@ -2598,6 +2622,22 @@ namespace NST
             return dependencies;
         }
 
+        /// <summary>
+        /// Cartella del gioco scelto con --gioco ("crash3" -> "Crash3"), null senza --gioco
+        /// </summary>
+        private static string? GameFolder(string? game) => string.IsNullOrEmpty(game) ? null : "Crash" + game.Substring(5);
+
+        /// <summary>
+        /// File principale del livello: quello con il nome del livello, oppure, per un livello creato da uno originale
+        /// (L112_RoadToNowhere_Custom), quello con il nome della sua cartella (maps/Crash1/L112_RoadToNowhere/L112_RoadToNowhere.igz)
+        /// </summary>
+        private static bool IsMainLevelFile(string path, List<string> levels, List<string> levelDirs)
+        {
+            string name = NamespaceUtils.GetFileName(path, false);
+            if (levels.Any(l => name.Equals(l, StringComparison.OrdinalIgnoreCase))) return true;
+            return levelDirs.Any(d => path.Equals($"maps/{d}/{d.Substring(d.LastIndexOf('/') + 1)}.igz", StringComparison.OrdinalIgnoreCase));
+        }
+
         private static string Mb(ulong bytes) => $"{bytes / (1024.0 * 1024.0):0.#} MB";
 
         /// <summary>
@@ -2684,7 +2724,7 @@ namespace NST
                     report.AppendLine($"Livello originale di riferimento {reference}: {Mb((ulong)refLevel.size)}.");
                     if (total > refLevel.size)
                         report.AppendLine($"ATTENZIONE: il livello e' {(double)total / refLevel.size:0.0} volte {reference}: con la memoria di quel livello " +
-                                          "potrebbe rallentare o chiudersi sulla Switch. Prova --memoria max e togli oggetti presi da altri livelli.");
+                                          "potrebbe rallentare o chiudersi sulla Switch. Togli oggetti presi da altri livelli.");
                 }
                 report.AppendLine("Livelli originali piu' grandi: " +
                                   string.Join(", ", originals.Take(3).Select(o => $"{o.name} {Mb((ulong)o.size)}")));
