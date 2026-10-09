@@ -51,6 +51,7 @@ namespace Alchemy
         public Stream? ArchiveStream { get; set; } = null;
 
         public bool IsCompressed() => _compressionType != CompressionType.Uncompressed;
+        public int UncompressedSize => _uncompressedSize;
         public bool IsIGZ() => Path.EndsWith(".igz") || Path.EndsWith(".lng");
         public bool IsHKX() => NamespaceUtils.GetExtension(Path).StartsWith(".hk");
 

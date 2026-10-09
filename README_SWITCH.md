@@ -51,6 +51,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro] [--registra-in update|chunkinfos]
+        [--gioco crash1|crash2|crash3] [--memoria modello|max|<livello>]
         [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -115,6 +116,18 @@ Dettagli:
   zone info presa dall'originale l'intro viene spenta: altrimenti il gioco aspetta un'intro
   che non c'è e Crash non compare. Se Crash continua a non comparire,
   `--zoneinfo-da L101_NSanityBeach` funziona (il livello segue però le regole di Crash 1).
+- `--gioco crash1|crash2|crash3` (con `--nuovo`): il livello si gioca con le regole di quel gioco
+  (mosse, interfaccia, reliquie), qualunque gioco fosse impostato nell'editor. È quello che fa
+  "Crash Mode" nell'editor: cambia il gioco (anno) della zone info, presa dal primo livello di
+  quel gioco (`L301_ToadVillage` per Crash 3) o, per un livello `..._Custom`, dal suo originale.
+  Gli oggetti del livello restano quelli che sono. Per un livello che nell'editor era di Crash 1
+  o 2, `--gioco crash3` aggiunge anche l'intro di Crash 3 (vedi `--aggiungi-intro`).
+- `--memoria modello|max|<livello>` (con `--nuovo`): dimensione delle aree di memoria del livello
+  nella zone info (`_levelPoolSize` e `_globalChunkPoolSize`). Con `modello` (predefinito) sono
+  quelle del livello originale da cui viene la zone info; con `max` quelle del livello originale
+  che ne ha di più; con il nome di un livello originale quelle di quel livello. Da provare se un
+  livello grande rallenta o si chiude sulla Switch: la sezione `MEMORIA` del rapporto dice quanto
+  pesa.
 - `--salvataggio` (con `--nuovo`): `proprio` (predefinito) dà al livello una voce di
   salvataggio sua, con il suo nome; `originale` usa quella del livello da cui viene la zone
   info (gemme, casse e tempi finiscono su quel livello).
@@ -131,6 +144,12 @@ Dettagli:
   nell'archivio, con le sue
   dipendenze CTR. Non è detto che il gioco Crash sappia leggere i file di CTR: il rapporto
   riporta versione e piattaforma dei loro igz.
+- `--aggiungi-intro` (prova): se il livello non ha l'intro di Crash 3 (Crash che esce dal portale),
+  la copia da Gone Tomorrow della Switch, con le stesse impostazioni che usa l'editor per un
+  livello nuovo di Crash 3, insieme ai file che le servono (elencati nel rapporto). Con
+  `--gioco crash3` è automatica per i livelli di Crash 1 e 2. Nella zone info di un livello di
+  Crash 3 l'intro "magic moment" del livello originale viene sempre spenta: accesa, Crash non
+  compare.
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
   esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
   non parte, Crash non compare e non si può muovere.
@@ -172,6 +191,26 @@ Il nome dell'archivio conta: il gioco apre `archives/<livello in minuscolo>.pak`
 distingue maiuscole e minuscole, quindi `Custom_Level.pak` non viene trovato e il gioco resta
 sulla schermata di caricamento. Il convertitore e `crea_avvio_livello.py` avvisano se il nome
 non è quello giusto; sulla Switch NST Pak Manager (1.8.1 o successivo) lo sistema da solo.
+
+### Livelli grandi
+
+La Switch ha molta meno memoria e potenza del PC, e ogni livello originale ha aree di memoria
+dimensionate per il suo contenuto. Un livello fatto sul PC può superarle:
+
+- l'editor copia per intero i file degli altri livelli da cui prendi oggetti, anche uno solo:
+  un livello con oggetti di dieci livelli carica la grafica di dieci livelli;
+- la zone info presa da un livello originale porta la memoria di quel livello.
+
+La sezione `MEMORIA` del rapporto dice quanto pesa il livello, quanto ne arriva da altri livelli
+e quali file sono più grandi, e lo confronta con il livello originale da cui viene la zone info
+e con i livelli originali più grandi. Se il livello è molto più grande:
+
+1. prova `--memoria max`: a volte basta se il livello si chiude o si blocca;
+2. nell'editor usa oggetti di meno livelli diversi (meglio dallo stesso gioco o dal livello
+   di partenza) e togli quelli che non servono.
+
+I rallentamenti dovuti a troppi oggetti, luci o effetti non si risolvono con la memoria: vanno
+alleggeriti nell'editor.
 
 ## Altri comandi
 

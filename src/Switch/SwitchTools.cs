@@ -69,9 +69,17 @@ namespace NST
             public string? CtrDump;
             // converti: toglie l'intro dei livelli di Crash 3 (Crash che esce dal portale), aggiunta dall'editor
             public bool WithoutIntro;
+            // converti: aggiunge l'intro dei livelli di Crash 3 se il livello non ce l'ha (presa da Gone Tomorrow,
+            // come fa l'editor); automatica con --gioco crash3 per un livello di un altro gioco
+            public bool AddIntro;
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
+            // --nuovo: gioco del livello ("crash1", "crash2", "crash3") al posto di quello scelto nell'editor (Crash Mode)
+            public string? Game;
+            // --nuovo: memoria del livello nella zone info: "modello" (quella del livello originale da cui viene la
+            // zone info), "max" (la piu' grande tra i livelli originali) o il nome di un livello originale
+            public string Memory = "modello";
         }
 
         public static int Run(string[] args)
@@ -143,6 +151,9 @@ namespace NST
                 else if (name == "--escludi" && hasValue) { options.Exclude.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--ctr" && hasValue) { options.CtrDump = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--senza-intro") { options.WithoutIntro = true; rest.RemoveAt(i); }
+                else if (name == "--aggiungi-intro") { options.AddIntro = true; rest.RemoveAt(i); }
+                else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
+                else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -155,7 +166,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro] [--registra-in update|chunkinfos] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1539,6 +1550,16 @@ namespace NST
                 Console.WriteLine("Errore: --nuovo non si usa insieme a --sostituisci o --come-originale");
                 return 1;
             }
+            if (options.Game == "")
+            {
+                Console.WriteLine("Errore: --gioco vuole crash1, crash2 o crash3");
+                return 1;
+            }
+            if (!options.NewLevel && (options.Game != null || !options.Memory.Equals("modello", StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine("Errore: --gioco e --memoria si usano solo con --nuovo (cambiano la zone info del livello nuovo)");
+                return 1;
+            }
 
             // Livello nuovo: prende il nome dell'archivio di uscita (il gioco apre archives/<livello>.pak,
             // quindi file e livello devono avere lo stesso nome)
@@ -1686,6 +1707,14 @@ namespace NST
             var entityLines = new List<string>();
             bool levelHasC3Intro = false;
             int done = 0;
+
+            // Intro di Crash 3 da aggiungere se manca: con --aggiungi-intro, oppure con --gioco crash3 per un livello che
+            // nell'editor era di un altro gioco (l'editor la aggiunge quando passi un livello a Crash 3)
+            EGameYear? editorYear = PcZoneInfoYear(pc.Files.ToList());
+            bool addIntro = !options.WithoutIntro &&
+                            (options.AddIntro || (options.Game == "crash3" && editorYear != EGameYear.eGY_2017_Crash3));
+            if (options.WithoutIntro && options.AddIntro)
+                report.AppendLine("--aggiungi-intro ignorata: c'e' anche --senza-intro");
 
             void AddOriginal(IgArchiveFile file, string counter)
             {
@@ -1901,6 +1930,31 @@ namespace NST
                         igz.GameVersion = GameVersion.NSX;
                         string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
 
+                        // Intro di Crash 3 aggiunta al file principale del livello (copiata da Gone Tomorrow della Switch)
+                        bool mainFile = levels.Any(l => NamespaceUtils.GetFileName(path, false).Equals(l, StringComparison.OrdinalIgnoreCase));
+                        if (addIntro && mainFile && !hasIntro && !levelHasC3Intro)
+                        {
+                            try
+                            {
+                                List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, out string introInfo);
+                                levelHasC3Intro = true;
+                                Increment(counters, "intro di Crash 3 aggiunta");
+                                lines.Add($"intro di Crash 3 aggiunta a {target}: {introInfo}");
+                                foreach (IgArchiveFile dependency in introFiles)
+                                {
+                                    // un file che c'e' anche nell'archivio PC si converte dal PC, come gli altri
+                                    if (pc.Files.Any(f => f.Path.Equals(dependency.Path, StringComparison.OrdinalIgnoreCase))) continue;
+                                    AddOriginal(dependency, "file per l'intro di Crash 3 (da L321_GoneTomorrow Switch)");
+                                    lines.Add($"per l'intro di Crash 3: {dependency.Path}");
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Increment(counters, "errori");
+                                lines.Add($"ERRORE aggiungendo l'intro di Crash 3: {e.GetType().Name}: {e.Message}");
+                            }
+                        }
+
                         if (rename != null)
                         {
                             int renamedCount = RenameNamespaces(igz, renamedNamespaces);
@@ -2080,6 +2134,7 @@ namespace NST
             }
 
             string? updatePath = null;
+            string? sizeReference = rename?.ToName ?? options.ReplaceLevel;  // livello originale con cui confrontare la memoria
             if (options.NewLevel && newPackage != null)
             {
                 // Archivio della registrazione: update.pak oppure chunkInfos.pak (con il nome che ha nel dump)
@@ -2106,13 +2161,15 @@ namespace NST
                     // puo' essere diverso dalla cartella: un livello in crash3 impostato come Crash 1 non ha l'intro di
                     // Crash 3 e con la zone info di un livello di Crash 3 Crash non compare
                     EGameYear? pcYear = PcZoneInfoYear(registration);
-                    string yearGame = pcYear == EGameYear.eGY_2017_Crash1 ? "crash1"
-                                    : pcYear == EGameYear.eGY_2017_Crash2 ? "crash2"
-                                    : pcYear == EGameYear.eGY_2017_Crash3 ? "crash3" : game;
+                    string yearGame = options.Game
+                                    ?? (pcYear == EGameYear.eGY_2017_Crash1 ? "crash1"
+                                      : pcYear == EGameYear.eGY_2017_Crash2 ? "crash2"
+                                      : pcYear == EGameYear.eGY_2017_Crash3 ? "crash3" : game);
                     string gameDefault = yearGame == "crash2" ? "L201_TurtleWoods" : yearGame == "crash3" ? "L301_ToadVillage" : "L101_NSanityBeach";
                     zoneTemplate = detectedBase != null && FindZoneInfo(sw, detectedBase.Value.to) != null ? detectedBase.Value.to : gameDefault;
                     report.AppendLine($"--nuovo: zone info presa da {zoneTemplate} (scelta automatica; per cambiarla --zoneinfo-da <livello>)");
-                    if (pcYear != null) report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {yearGame}, cartella del livello: {game}");
+                    if (options.Game != null) report.AppendLine($"  gioco scelto con --gioco: {options.Game}, cartella del livello: {game}");
+                    else if (pcYear != null) report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {yearGame}, cartella del livello: {game}");
                     if (yearGame != game && zoneTemplate == gameDefault)
                         report.AppendLine($"  il livello e' nella cartella {game} ma nell'editor e' impostato come {yearGame}: zone info di {yearGame}");
                 }
@@ -2121,8 +2178,37 @@ namespace NST
                     zoneTemplate = null;
                     report.AppendLine("--nuovo: zone info dell'editor convertita dal PC (--zoneinfo-da pc): il gioco potrebbe bloccarsi all'avvio diretto");
                 }
+                sizeReference = zoneTemplate;
+
+                // Memoria del livello (--memoria): dimensioni delle aree di memoria da un'altra zone info originale
+                CZoneInfo? poolSource = null;
+                string? poolFrom = null;
+                if (options.Memory.Equals("max", StringComparison.OrdinalIgnoreCase))
+                {
+                    (poolSource, poolFrom) = LargestPoolZoneInfo(sw);
+                    if (poolSource == null) report.AppendLine("--memoria max: nessuna zone info originale leggibile nel dump");
+                }
+                else if (!options.Memory.Equals("modello", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        poolSource = FindZoneInfo(sw, options.Memory)?.ToIgzFile().FindObject<CZoneInfo>();
+                    }
+                    catch (Exception e)
+                    {
+                        report.AppendLine($"--memoria {options.Memory}: zone info non leggibile ({e.Message})");
+                    }
+                    poolFrom = options.Memory;
+                    if (poolSource == null)
+                    {
+                        Console.WriteLine($"Errore: --memoria {options.Memory}: zone info di quel livello non trovata nel dump (usa modello, max o il nome di un livello originale)");
+                        return 1;
+                    }
+                }
+
+                EGameYear? forcedYear = options.Game == null ? null : LevelBuilder.GetGameYear(options.Game);
                 if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                       options.SaveMode != "originale", levelHasC3Intro))
+                                       options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom))
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2168,6 +2254,8 @@ namespace NST
                     .FirstOrDefault(f => Path.GetFileName(f).Equals(Path.GetFileName(outputPath), StringComparison.OrdinalIgnoreCase));
                 if (existing != null && Path.GetFileName(existing) != Path.GetFileName(outputPath)) File.Delete(existing);
             }
+
+            AppendMemoryReport(report, output, sw, sizeReference);
 
             output.Save(outputPath);
 
@@ -2280,7 +2368,8 @@ namespace NST
         private static bool BuildRegistration(string levelId, List<IgArchiveFile> updateFiles, ArchiveIndex sw, string updatePath, StringBuilder report,
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
-                                              bool ownSave, bool levelHasC3Intro)
+                                              bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
+                                              CZoneInfo? poolSource, string? poolFrom)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -2386,12 +2475,30 @@ namespace NST
                 string? oldName = zoneInfo._name;
                 zoneInfo._name = levelId;
                 if (ownSave) zoneInfo._saveName = levelId.Substring(levelId.LastIndexOf('/') + 1);
-                // Zone info di Crash 3 con l'intro: il gioco aspetta l'intro del livello (Crash che esce dal portale) per far
-                // comparire Crash. Se il livello non ce l'ha, Crash non compare: l'intro si spegne
-                if (!levelHasC3Intro && zoneInfo._year == EGameYear.eGY_2017_Crash3 && zoneInfo._flags._magicMomentIntro)
+                // --gioco: come "Crash Mode" nell'editor, cambia solo il gioco (anno) della zone info
+                if (forcedYear != null && zoneInfo._year != forcedYear.Value)
+                {
+                    report.AppendLine($"  gioco cambiato con --gioco: {zoneInfo._year} -> {forcedYear.Value}");
+                    zoneInfo._year = forcedYear.Value;
+                }
+                // --memoria: aree di memoria del livello prese da un'altra zone info originale
+                if (poolSource != null)
+                {
+                    zoneInfo._levelPoolSize ??= new igSizeTypeMetaField();
+                    zoneInfo._globalChunkPoolSize ??= new igSizeTypeMetaField();
+                    report.AppendLine($"  memoria del livello da {poolFrom} (--memoria): livello {Mb(zoneInfo._levelPoolSize._size)} -> " +
+                                      $"{Mb(poolSource._levelPoolSize?._size ?? 0)}, globale {Mb(zoneInfo._globalChunkPoolSize._size)} -> " +
+                                      $"{Mb(poolSource._globalChunkPoolSize?._size ?? 0)}");
+                    if (poolSource._levelPoolSize != null) zoneInfo._levelPoolSize._size = poolSource._levelPoolSize._size;
+                    if (poolSource._globalChunkPoolSize != null) zoneInfo._globalChunkPoolSize._size = poolSource._globalChunkPoolSize._size;
+                }
+                // Zone info di Crash 3 presa da un livello originale con l'intro accesa: Crash non compariva (Oichi, v24);
+                // spenta, Crash compare e l'intro del livello (Crash che esce dal portale) parte lo stesso (v25)
+                if (zoneInfo._year == EGameYear.eGY_2017_Crash3 && zoneInfo._flags._magicMomentIntro)
                 {
                     zoneInfo._flags._magicMomentIntro = false;
-                    report.AppendLine("  intro della zone info spenta: il livello non ha l'intro di Crash 3 (Crash che esce dal portale)");
+                    report.AppendLine("  intro della zone info spenta (magic moment); intro di Crash 3 nel livello: " +
+                                      (levelHasC3Intro ? "si'" : "no, Crash compare senza (--aggiungi-intro per aggiungerla)"));
                 }
                 igz.GameVersion = GameVersion.NSX;
                 byte[] zoneInfoData = igz.Save(NamespaceUtils.GetFileName(zoneInfoPath, false));
@@ -2455,6 +2562,139 @@ namespace NST
         }
 
         /// <summary>
+        /// Copia nel file principale del livello l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer di
+        /// L321_GoneTomorrow, dal dump Switch) con le stesse impostazioni che usa l'editor per un livello nuovo.
+        /// Restituisce i file di Gone Tomorrow che servono all'intro (script, comportamenti, ...).
+        /// </summary>
+        private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, out string info)
+        {
+            string pakPath = PakFiles(switchDir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals("l321_gonetomorrow", StringComparison.OrdinalIgnoreCase))
+                             ?? throw new FileNotFoundException("l321_gonetomorrow.pak non trovato nel dump Switch");
+            IgArchive source = IgArchive.Open(pakPath);
+            IgArchiveFile sourceFile = source.Files.FirstOrDefault(f => NamespaceUtils.GetFileName(f.Path, false).Equals("L321_GoneTomorrow", StringComparison.OrdinalIgnoreCase) &&
+                                                                        f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase))
+                                       ?? throw new FileNotFoundException("file principale di Gone Tomorrow non trovato in " + Path.GetFileName(pakPath));
+            IgzFile sourceIgz = sourceFile.ToIgzFile();
+            CEntity intro = sourceIgz.FindObject<CEntity>("IntroCutsceneSequencePlayer")
+                            ?? throw new InvalidDataException("IntroCutsceneSequencePlayer non trovato in " + sourceFile.Path);
+            common_C3_IntroSequenceData introData = intro.GetComponent<common_C3_IntroSequenceData>()
+                            ?? throw new InvalidDataException("IntroCutsceneSequencePlayer senza common_C3_IntroSequenceData");
+
+            // Come LevelBuilder.CreateNewLevel per un livello nuovo di Crash 3
+            introData._BehaviorEventCrashIntro = "Cutscene_Crash2_Portal_Exit_Victory";
+            introData._Float_0x30 = 1.0f;
+            introData._Float_0x34 = 1.0f;
+            introData._Float_0x40 = 2.45f;
+            introData._Float_0x4c = 300;
+            CEntityHandleList? shots = sourceIgz.FindObject<CEntityHandleList>("IntroCutsceneSequencePlayer_entityData_componentData_CommonCutsceneSequencePlayer_CutsceneSequenceShotList001");
+            if (shots != null) shots._data.Clear();
+            else if (intro.GetComponent<common_CutsceneSequencePlayerData>() is common_CutsceneSequencePlayerData player)
+                player._CutsceneSequenceShotList.Reference = null;
+
+            IgzFile.Clone(intro, source, output, sourceIgz, destIgz, out List<IgArchiveFile> dependencies);
+            // il file principale di Gone Tomorrow no: porterebbe nel livello tutte le sue entita'
+            dependencies.RemoveAll(d => d.Path.Equals(sourceFile.Path, StringComparison.OrdinalIgnoreCase));
+            info = $"da {sourceFile.Path}, {dependencies.Count} file collegati";
+            return dependencies;
+        }
+
+        private static string Mb(ulong bytes) => $"{bytes / (1024.0 * 1024.0):0.#} MB";
+
+        /// <summary>
+        /// --gioco: crash1/crash2/crash3 (anche 1, 2, 3 o c3); "" se non valido
+        /// </summary>
+        private static string NormalizeGame(string value)
+        {
+            string v = value.Trim().ToLowerInvariant().Replace(" ", "");
+            if (v.StartsWith("crash")) v = v.Substring(5);
+            else if (v.StartsWith("c")) v = v.Substring(1);
+            return v is "1" or "2" or "3" ? "crash" + v : "";
+        }
+
+        /// <summary>
+        /// Zone info originale con l'area di memoria del livello piu' grande (--memoria max)
+        /// </summary>
+        private static (CZoneInfo? zone, string? level) LargestPoolZoneInfo(ArchiveIndex sw)
+        {
+            CZoneInfo? best = null;
+            string? bestLevel = null;
+            foreach (var (path, file) in sw.ByPath)
+            {
+                if (!path.StartsWith("maps/") || !path.EndsWith("_zoneinfo.igz")) continue;
+                try
+                {
+                    if (file.ToIgzFile().FindObject<CZoneInfo>() is not CZoneInfo zone || zone._levelPoolSize == null) continue;
+                    if (best == null || zone._levelPoolSize._size > best._levelPoolSize!._size)
+                    {
+                        best = zone;
+                        bestLevel = NamespaceUtils.GetFileName(path, false);
+                    }
+                }
+                catch
+                {
+                    // zone info non leggibile: si salta
+                }
+            }
+            if (bestLevel != null && bestLevel.EndsWith("_zoneinfo")) bestLevel = bestLevel.Substring(0, bestLevel.Length - "_zoneinfo".Length);
+            return (best, bestLevel);
+        }
+
+        /// <summary>
+        /// Quanto pesa il livello (file che il gioco carica, non compressi), diviso per provenienza, confrontato con il
+        /// livello originale da cui viene la zone info (o quello sostituito) e con i livelli originali piu' grandi
+        /// </summary>
+        private static void AppendMemoryReport(StringBuilder report, IgArchive output, ArchiveIndex sw, string? reference)
+        {
+            var files = output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
+            long total = files.Sum(f => (long)f.UncompressedSize);
+            string? ownDir = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir.ToLowerInvariant();
+
+            report.AppendLine("=== MEMORIA ===");
+            report.AppendLine($"Il livello carica {Mb((ulong)total)} di file ({files.Count} file, non compressi).");
+            var groups = new Dictionary<string, long>();
+            foreach (IgArchiveFile f in files)
+            {
+                string[] parts = f.Path.ToLowerInvariant().Split('/');
+                string group = parts.Length >= 4 && parts[0] == "maps"
+                    ? (parts[1] + "/" + parts[2] == ownDir ? "cartella del livello" : "altro livello: " + parts[2])
+                    : parts.Length >= 2 ? parts[0] + "/" : "altro";
+                groups[group] = groups.GetValueOrDefault(group) + f.UncompressedSize;
+            }
+            foreach (var (group, size) in groups.OrderByDescending(g => g.Value).Take(15))
+                report.AppendLine($"  {Mb((ulong)size),10}  {group}");
+            int otherLevels = groups.Keys.Count(k => k.StartsWith("altro livello: "));
+            if (otherLevels > 0)
+                report.AppendLine($"  ({otherLevels} altri livelli: l'editor copia per intero i file da cui prendi anche un solo oggetto)");
+            report.AppendLine("File piu' grandi:");
+            foreach (IgArchiveFile f in files.OrderByDescending(x => x.UncompressedSize).Take(10))
+                report.AppendLine($"  {Mb((ulong)f.UncompressedSize),10}  {f.Path}");
+
+            // Livelli originali per confronto (archivi Lxxx_/Bxxx_ del dump)
+            var originals = sw.ByArchive
+                .Where(a => a.Key.Length > 5 && (a.Key[0] == 'l' || a.Key[0] == 'b') && char.IsDigit(a.Key[1]) && a.Key[4] == '_')
+                .Select(a => (name: a.Key, size: a.Value.Sum(f => (long)f.UncompressedSize)))
+                .OrderByDescending(a => a.size)
+                .ToList();
+            if (originals.Count > 0)
+            {
+                string? refKey = reference?.ToLowerInvariant();
+                var refLevel = originals.FirstOrDefault(o => o.name == refKey);
+                if (refKey != null && refLevel.name == refKey)
+                {
+                    report.AppendLine($"Livello originale di riferimento {reference}: {Mb((ulong)refLevel.size)}.");
+                    if (total > refLevel.size)
+                        report.AppendLine($"ATTENZIONE: il livello e' {(double)total / refLevel.size:0.0} volte {reference}: con la memoria di quel livello " +
+                                          "potrebbe rallentare o chiudersi sulla Switch. Prova --memoria max e togli oggetti presi da altri livelli.");
+                }
+                report.AppendLine("Livelli originali piu' grandi: " +
+                                  string.Join(", ", originals.Take(3).Select(o => $"{o.name} {Mb((ulong)o.size)}")));
+                if (total > originals[0].size)
+                    report.AppendLine("ATTENZIONE: il livello e' piu' grande di tutti i livelli originali.");
+            }
+            report.AppendLine();
+        }
+
+        /// <summary>
         /// Anno (gioco) della zone info del livello PC tra i file update/, null se manca o non si legge
         /// </summary>
         private static EGameYear? PcZoneInfoYear(List<IgArchiveFile> updateFiles)
@@ -2478,7 +2718,8 @@ namespace NST
         {
             return $"nome '{zone._name}', anno {zone._year}, build '{zone._build}', personaggio '{zone._overrideCharacter}', " +
                    $"veicolo '{zone._zoneVehicle}', intro {zone._flags._magicMomentIntro}, boss {zone._flags._isBoss}, menu {zone._flags._isMenu}, " +
-                   $"salvataggio '{zone._saveName}', caricamento '{zone._loadScreenName}'/'{zone._loadMovieName}'";
+                   $"salvataggio '{zone._saveName}', caricamento '{zone._loadScreenName}'/'{zone._loadMovieName}', " +
+                   $"memoria livello {Mb(zone._levelPoolSize?._size ?? 0)}, globale {Mb(zone._globalChunkPoolSize?._size ?? 0)}";
         }
 
         /// <summary>
