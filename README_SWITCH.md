@@ -170,13 +170,15 @@ Dettagli:
   altri restano nell'archivio e il rapporto li elenca come "fuori dal pacchetto". Alcuni livelli
   (Tropical Escape) hanno nel pacchetto PC anche i file interi di altri livelli: lì serve
   `--solo-usati`.
-- `--solo-usati` (prova): dei file di altri livelli (quelli in `maps/` fuori dalla cartella
-  del livello) tiene solo gli oggetti che il livello usa davvero, cioè quelli a cui i suoi file
-  fanno riferimento, con tutto quello a cui sono collegati. Un file di cui non usa nessun
-  oggetto esce dal pacchetto. Poi toglie dall'archivio i file che nessun file del livello usa
-  più: file di altri livelli, modelli, materiali e texture. Il rapporto ha due sezioni:
-  `SOLO GLI OGGETTI USATI` (oggetti prima e dopo, file per file) e `FILE NON PIU' USATI`
-  (quanti MB ha tolto). Se nel livello manca qualcosa o si blocca, riconverti senza.
+- `--solo-usati` (prova): i file di altri livelli che l'editor copia fanno parte del livello
+  (gli oggetti che prendi restano dentro di loro), quindi restano tutti. Da quei file però
+  toglie le entità che servono solo al livello da cui vengono: il mondo (`CWorldEntity`, che
+  contiene anche la modalità di quel livello, per esempio la moto d'acqua), la partenza, l'intro
+  e il teletrasporto di fine livello. Poi toglie dall'archivio modelli, materiali e texture che
+  nessun file del livello usa. Il rapporto elenca le entità globali trovate (sezione
+  `ENTITA' GLOBALI NEI FILE DI ALTRI LIVELLI`, anche senza l'opzione) e la grafica tolta
+  (`GRAFICA NON USATA`). Fino alla v33 l'opzione toglieva gli oggetti a cui il livello non fa
+  riferimento: sbagliato, perché toglieva anche il pavimento.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
