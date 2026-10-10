@@ -25,11 +25,11 @@ namespace NST
     ///       Rewrites a Switch archive with the editor, optionally rewriting its igz files
     ///       (test of the archive and igz writers in the game).
     ///
-    ///   NST.exe --switch converti &lt;pc.pak&gt; &lt;switch_dump_folder&gt; &lt;output.pak&gt; [report.txt]
-    ///           [--come-originale] [--pc-originali &lt;pc_archives_folder&gt;]
+    ///   NST.exe --switch converti &lt;pc.pak&gt; &lt;switch_dump_folder&gt; &lt;output.pak&gt; [report.txt] [opzioni]
     ///       Builds a Switch archive: unmodified assets are taken from the Switch game, the files of
-    ///       the level are converted from the PC version. --come-originale gives the level back the
-    ///       name of the original level, so that the archive can replace it.
+    ///       the level are converted from the PC version. --nuovo registers it as a new level (update.pak),
+    ///       --come-originale / --sostituisci put it in place of an original level. All the options are in
+    ///       PrintUsage and in README_SWITCH.md.
     /// </summary>
     public static class SwitchTools
     {
@@ -92,7 +92,16 @@ namespace NST
             // converti: file di altri livelli (testo nel percorso) presi dall'originale Switch invece di convertire
             // la copia del PC, con le loro dipendenze dallo stesso archivio Switch
             public List<string> SwitchOriginals = [];
+            // Errori nella riga di comando (opzioni sconosciute, valori mancanti o non validi)
+            public List<string> Errors = [];
         }
+
+        // Opzioni che vogliono un valore
+        private static readonly HashSet<string> _valueOptions =
+        [
+            "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
+            "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
+        ];
 
         public static int Run(string[] args)
         {
@@ -107,6 +116,12 @@ namespace NST
                 string command = args[0].ToLowerInvariant();
                 List<string> rest = args.Skip(1).Select(CleanPath).ToList();
                 Options options = ParseOptions(rest);
+                if (options.Errors.Count > 0)
+                {
+                    foreach (string error in options.Errors) Console.WriteLine("Errore: " + error);
+                    PrintUsage();
+                    return 1;
+                }
 
                 switch (command)
                 {
@@ -147,7 +162,20 @@ namespace NST
                 string name = rest[i].ToLowerInvariant();
                 bool hasValue = i + 1 < rest.Count;
 
-                if (name == "--max" && hasValue) { options.Max = int.Parse(rest[i + 1]); rest.RemoveRange(i, 2); }
+                // un'opzione che vuole un valore non prende l'opzione successiva (--escludi --solo-usati)
+                if (_valueOptions.Contains(name) && (!hasValue || rest[i + 1].StartsWith("--")))
+                {
+                    options.Errors.Add($"{rest[i]} vuole un valore");
+                    rest.RemoveAt(i);
+                    continue;
+                }
+
+                if (name == "--max" && hasValue)
+                {
+                    if (int.TryParse(rest[i + 1], out int max) && max > 0) options.Max = max;
+                    else options.Errors.Add($"--max {rest[i + 1]}: serve un numero");
+                    rest.RemoveRange(i, 2);
+                }
                 else if (name == "--pak" && hasValue) { options.PakFilter = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--pc-originali" && hasValue) { options.PcOriginals = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--come-originale") { options.RenameBack = true; rest.RemoveAt(i); }
@@ -172,6 +200,18 @@ namespace NST
                 else if (name == "--originale-switch" && hasValue) { options.SwitchOriginals.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else i++;
             }
+
+            // Un'opzione scritta male finirebbe tra i file (per esempio come nome del rapporto) e verrebbe ignorata
+            foreach (string unknown in rest.Where(a => a.StartsWith("--"))) options.Errors.Add($"opzione sconosciuta: {unknown}");
+            rest.RemoveAll(a => a.StartsWith("--"));
+
+            if (options.RegisterIn != "update" && options.RegisterIn != "chunkinfos")
+                options.Errors.Add($"--registra-in {options.RegisterIn}: valori possibili update, chunkinfos");
+            if (options.SaveMode != "proprio" && options.SaveMode != "originale")
+                options.Errors.Add($"--salvataggio {options.SaveMode}: valori possibili proprio, originale");
+            string igzMode = options.IgzMode.ToLowerInvariant();
+            if (igzMode != "nessuno" && igzMode != "maps" && igzMode != "tutti")
+                options.Errors.Add($"--igz {options.IgzMode}: valori possibili nessuno, maps, tutti");
             return options;
         }
 
@@ -1351,7 +1391,8 @@ namespace NST
             int count = 0;
             foreach (igObject obj in igz.Objects)
             {
-                foreach (NamedReference handle in obj.GetHandles(igz.GameVersion))
+                // tutti i riferimenti, anche dentro liste, memorie e strutture (GetHandles dell'editor non li vede tutti)
+                foreach (NamedReference handle in ObjectReferences(obj, igz.GameVersion))
                 {
                     string? newName = NewName(handle.namespaceName);
                     if (newName == null) continue;
@@ -1367,6 +1408,51 @@ namespace NST
                 }
             }
             return count;
+        }
+
+        /// <summary>
+        /// Riferimenti per nome di un oggetto (handle e oggetti di altri file) nei suoi campi, anche dentro liste, memorie,
+        /// tabelle e strutture. Non entra negli altri oggetti del file (nell'igz ci sono tutti, si visitano a parte). Serve
+        /// perche' GetHandles dell'editor non guarda gli oggetti esterni nelle memorie e, se un campo e' un array di numeri,
+        /// non restituisce niente per tutto l'oggetto
+        /// </summary>
+        private static List<NamedReference> ObjectReferences(igObject obj, GameVersion version)
+        {
+            var result = new List<NamedReference>();
+            var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+            void Collect(object? value, int depth)
+            {
+                if (value == null || depth > 64) return;
+                switch (value)
+                {
+                    case igHandleMetaField handle:
+                        if (handle.Reference != null) result.Add(handle.Reference);
+                        return;
+                    case igObject other:
+                        // oggetto di un altro file (EXNM/EXID); quelli del file si visitano da soli
+                        if (other.Reference != null) result.Add(other.Reference);
+                        return;
+                    case string:
+                        return;
+                }
+                if (!value.GetType().IsClass || !visited.Add(value)) return;
+                if (value is IMemoryRef && value is IEnumerable elements)
+                {
+                    foreach (object? element in elements) Collect(element, depth + 1);
+                }
+                else if (value is igObjectBase meta)
+                {
+                    foreach (CachedFieldAttr field in meta.GetFields(version)) Collect(field.GetValue(meta), depth + 1);
+                }
+                else if (value is Array array && !array.GetType().GetElementType()!.IsPrimitive)
+                {
+                    foreach (object? element in array) Collect(element, depth + 1);
+                }
+            }
+
+            foreach (CachedFieldAttr field in obj.GetFields(version)) Collect(field.GetValue(obj), 0);
+            return result;
         }
 
         /// <summary>
@@ -1414,14 +1500,32 @@ namespace NST
             public string? FromDir;
             public string? ToDir;
 
+            /// <summary>
+            /// Cartella e nome cambiano solo nei percorsi dei file dei livelli (maps/, models/maps/, packages/generated/maps/,
+            /// anche sotto update/): gli asset del livello originale (models/Levels/..., vsc/...) tengono il loro percorso,
+            /// cosi' si trovano tra gli originali Switch. Il nome cambia solo nel nome del file e solo come parola intera
+            /// (Custom_Level.igz, Custom_Level_Art.igz, StaticCollision_Custom_Level.hkx), in un solo passaggio: fino alla
+            /// v36 Custom_Level -> Custom_Level2 dava la cartella Custom_Level22
+            /// </summary>
             public string Apply(string path)
             {
-                string result = path;
+                string[] parts = path.Split('/');
+                int start = LevelFolderStart(parts, 0);
+                if (start < 0) return path;
                 if (FromDir != null && ToDir != null && !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase))
                 {
-                    result = ReplaceIgnoreCase(result, "/" + FromDir + "/", "/" + ToDir + "/");
+                    string[] from = FromDir.Split('/');
+                    string[] to = ToDir.Split('/');
+                    if (from.Length == 2 && to.Length == 2 && start + 2 < parts.Length &&
+                        parts[start].Equals(from[0], StringComparison.OrdinalIgnoreCase) &&
+                        parts[start + 1].Equals(from[1], StringComparison.OrdinalIgnoreCase))
+                    {
+                        parts[start] = to[0];
+                        parts[start + 1] = to[1];
+                    }
                 }
-                return ReplaceIgnoreCase(result, FromName, ToName);
+                parts[parts.Length - 1] = ReplaceNameToken(parts[parts.Length - 1], FromName, ToName);
+                return string.Join("/", parts);
             }
 
             public override string ToString()
@@ -1429,6 +1533,76 @@ namespace NST
                 string dirs = FromDir != null && ToDir != null && !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase) ? $" (cartella {FromDir} -> {ToDir})" : "";
                 return $"{FromName} -> {ToName}{dirs}";
             }
+        }
+
+        /// <summary>
+        /// Posizione della cartella del gioco (Crash1) nei percorsi dei file dei livelli: maps/Crash1/..., models/maps/Crash1/...,
+        /// packages/generated/maps/Crash1/..., anche sotto update/. -1 per gli altri percorsi
+        /// </summary>
+        private static int LevelFolderStart(string[] parts, int offset)
+        {
+            bool Is(int i, string text) => i < parts.Length && parts[i].Equals(text, StringComparison.OrdinalIgnoreCase);
+            if (Is(offset, "update")) return LevelFolderStart(parts, offset + 1);
+            if (Is(offset, "maps")) return offset + 1;
+            if (Is(offset, "models") && Is(offset + 1, "maps")) return offset + 2;
+            if (Is(offset, "packages") && Is(offset + 1, "generated") && Is(offset + 2, "maps")) return offset + 3;
+            return -1;
+        }
+
+        /// <summary>
+        /// Il nome come parola intera: all'inizio o dopo _ / e alla fine o prima di _ . / ,
+        /// </summary>
+        private static bool IsNameToken(string text, int start, int length)
+        {
+            int end = start + length;
+            bool before = start == 0 || text[start - 1] == '_' || text[start - 1] == '/';
+            bool after = end == text.Length || text[end] == '_' || text[end] == '.' || text[end] == '/' || text[end] == ',';
+            return before && after;
+        }
+
+        /// <summary>
+        /// Sostituisce il nome (maiuscole e minuscole indifferenti) solo dove e' una parola intera, in un solo passaggio
+        /// </summary>
+        private static string ReplaceNameToken(string text, string from, string to)
+        {
+            if (from.Length == 0 || from.Equals(to, StringComparison.Ordinal)) return text;
+            var result = new StringBuilder();
+            int position = 0;
+            while (position < text.Length)
+            {
+                int found = text.IndexOf(from, position, StringComparison.OrdinalIgnoreCase);
+                if (found < 0) break;
+                result.Append(text, position, found - position);
+                if (IsNameToken(text, found, from.Length))
+                {
+                    result.Append(to);
+                    position = found + from.Length;
+                }
+                else
+                {
+                    result.Append(text[found]);
+                    position = found + 1;
+                }
+            }
+            result.Append(text, position, text.Length - position);
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// Il percorso contiene il nome come parola intera (Custom_Level in maps/.../Custom_Level_Art.igz, non in Custom_Level2)
+        /// </summary>
+        private static bool HasNameToken(string text, string name)
+        {
+            if (name.Length == 0) return false;
+            int position = 0;
+            while (position < text.Length)
+            {
+                int found = text.IndexOf(name, position, StringComparison.OrdinalIgnoreCase);
+                if (found < 0) return false;
+                if (IsNameToken(text, found, name.Length)) return true;
+                position = found + 1;
+            }
+            return false;
         }
 
         /// <summary>
@@ -1510,7 +1684,7 @@ namespace NST
             // Regola fino alla v12: tutto quello che sta in maps/ e packages/ si converte dal PC
             string lower = path.ToLowerInvariant();
             if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) return true;
-            return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
+            return levels.Any(l => HasNameToken(path, l));
         }
 
         private static bool IsLevelContent(string path, List<string> levels, List<string> levelDirs)
@@ -1518,7 +1692,7 @@ namespace NST
             string lower = "/" + path.ToLowerInvariant();
             if (lower.StartsWith("/update/")) return true;
             if (levelDirs.Any(d => lower.Contains("/" + d.ToLowerInvariant().Trim('/') + "/"))) return true;
-            return levels.Any(l => lower.Contains(l.ToLowerInvariant()));
+            return levels.Any(l => HasNameToken(path, l));
         }
 
         private static bool SameData(IgArchiveFile a, IgArchiveFile b)
@@ -1540,9 +1714,37 @@ namespace NST
             report.AppendLine($"archivio PC: {pcPath}");
             report.AppendLine($"output: {outputPath}");
 
+            // L'uscita non va nella cartella del dump: Save svuota il file di arrivo e la conversione successiva
+            // prenderebbe il livello convertito (e il suo update.pak) per un file del gioco
+            string dumpFolder = Path.GetFullPath(switchDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            string outputFolder = (Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                                  Path.DirectorySeparatorChar;
+            if (Directory.Exists(switchDir) && outputFolder.StartsWith(dumpFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"Errore: l'archivio di uscita e' nella cartella del dump Switch ({dumpFolder}): scegli un'altra cartella");
+                return 1;
+            }
+
             Console.WriteLine("Indicizzo gli archivi Switch...");
-            ArchiveIndex sw = ArchiveIndex.Build(switchDir, null);
+            var indexErrors = new List<string>();
+            ArchiveIndex sw = ArchiveIndex.Build(switchDir, indexErrors);
             Dictionary<string, IgArchiveFile> index = sw.ByPath;
+            if (sw.ByArchive.Count == 0)
+            {
+                Console.WriteLine($"Errore: nessun archivio .pak leggibile in {switchDir} (serve la cartella del dump Switch che contiene gli archivi)");
+                return 1;
+            }
+            report.AppendLine($"dump Switch: {sw.ByArchive.Count} archivi, {index.Count} file");
+            foreach (string error in indexErrors.Take(10)) report.AppendLine("  ERRORE " + error);
+            if (indexErrors.Count > 10) report.AppendLine($"  ... e altri {indexErrors.Count - 10} errori");
+
+            // --memoria <livello>: controllato subito, non dopo la conversione
+            if (!options.Memory.Equals("modello", StringComparison.OrdinalIgnoreCase) && !options.Memory.Equals("max", StringComparison.OrdinalIgnoreCase) &&
+                FindZoneInfo(sw, options.Memory) == null)
+            {
+                Console.WriteLine($"Errore: --memoria {options.Memory}: zone info di quel livello non trovata nel dump (usa modello, max o il nome di un livello originale)");
+                return 1;
+            }
 
             // --ctr: grafica che il gioco Switch non ha presa da Crash Team Racing Nitro-Fueled per Switch (prova)
             ArchiveIndex? ctr = null;
@@ -1618,15 +1820,24 @@ namespace NST
                     report.AppendLine($"--nuovo: '{Path.GetFileNameWithoutExtension(outputPath)}' non e' un nome di livello valido (solo lettere, cifre e _): uso {requested}");
                 }
 
+                // Un livello nuovo con il nome di un livello del gioco prenderebbe il posto del suo archivio (e della sua voce
+                // di salvataggio); con il nome di un altro archivio del gioco (update, chunkinfos, crash1...) lo sostituirebbe
+                if (switchLevels.Any(l => l.Equals(requested, StringComparison.OrdinalIgnoreCase)))
+                {
+                    report.AppendLine($"--nuovo: {requested} e' il nome di un livello del gioco: per sostituirlo usa --sostituisci {requested} (o --come-originale)");
+                    File.WriteAllText(reportPath, report.ToString());
+                    Console.WriteLine($"Errore: {requested} e' gia' un livello del gioco. Scegli un altro nome di uscita oppure usa --sostituisci {requested}");
+                    return 1;
+                }
+                if (sw.ByArchive.ContainsKey(requested.ToLowerInvariant()) || requested.Equals("update", StringComparison.OrdinalIgnoreCase) ||
+                    requested.Equals("chunkinfos", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"Errore: {requested}.pak e' un archivio del gioco: scegli un altro nome per il file di uscita");
+                    return 1;
+                }
+
                 if (!requested.Equals(pcName, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (switchLevels.Any(l => l.Equals(requested, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        report.AppendLine($"--nuovo: {requested} e' il nome di un livello del gioco: per sostituirlo usa --sostituisci {requested}");
-                        File.WriteAllText(reportPath, report.ToString());
-                        Console.WriteLine($"Errore: {requested} e' gia' un livello del gioco. Scegli un altro nome di uscita oppure usa --sostituisci {requested}");
-                        return 1;
-                    }
                     if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
                     {
                         // Gli asset del livello originale hanno lo stesso nome: rinominarli li staccherebbe dagli originali Switch
@@ -1649,10 +1860,6 @@ namespace NST
                     rename = new LevelRename { FromName = pcName, ToName = pcName, FromDir = newPackage.Value.dir, ToDir = toDir };
                     newPackage = (toDir, pcName);
                     report.AppendLine($"--gioco: il livello passa nella cartella del gioco scelto: {rename}");
-                }
-                else if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
-                {
-                    report.AppendLine($"ATTENZIONE: {pcName} esiste gia' nel gioco: per sostituirlo usa --come-originale o --sostituisci");
                 }
 
                 // Sulla Switch gli archivi dei livelli sono in minuscolo (l112_roadtonowhere.pak) e il gioco
@@ -1783,13 +1990,39 @@ namespace NST
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
             var modifiedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var matchedSwitchOriginals = new HashSet<string>();
 
-            // Nomi dei file che il livello puo' usare: quelli del gioco Switch e quelli dell'archivio PC
+            // File di altri livelli nel pacchetto del PC: il gioco carica tutte le loro entita', fanno parte del livello.
+            // Quelli fuori dal pacchetto li usa solo per gli oggetti a cui il livello fa riferimento
+            bool InPcPackage(string pcFilePath) => pcPackageOriginal.Count == 0 || pcPackageOriginal.Contains(pcFilePath);
+            var otherLevelTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Nomi dei file che il livello puo' usare: quelli del gioco Switch e quelli dell'archivio PC che finiranno
+            // nell'archivio (non quelli esclusi con --escludi e non la grafica PC che la Switch non ha, che si salta)
             var availableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string name in index.Keys.Concat(pc.Files.Select(f => f.Path)))
+            foreach (string name in index.Keys)
                 foreach (string alias in NameAliases(NamespaceUtils.GetFileName(name, false).ToLowerInvariant()))
                     availableNames.Add(alias);
-            bool levelHasC3Intro = false;
+            foreach (IgArchiveFile pcFile in pc.Files)
+            {
+                string pcLower = pcFile.Path.ToLowerInvariant();
+                if (options.Exclude.Any(x => pcFile.Path.Contains(x, StringComparison.OrdinalIgnoreCase))) continue;
+                bool pcGraphics = (pcLower.StartsWith("models/") && !pcLower.StartsWith("models/maps/")) || pcLower.StartsWith("textures/") ||
+                                  pcLower.StartsWith("materialinstances/") || pcLower.StartsWith("loosetextures/");
+                if (pcGraphics && ctr == null && !index.ContainsKey(pcLower)) continue;
+                foreach (string alias in NameAliases(NamespaceUtils.GetFileName(pcFile.Path, false).ToLowerInvariant()))
+                    availableNames.Add(alias);
+            }
+
+            // Intro di Crash 3 gia' nel livello: nei suoi file e in quelli di altri livelli nel pacchetto del PC (il gioco ne
+            // carica tutte le entita'); le copie fuori dal pacchetto non contano. Si guarda prima di convertire, perche'
+            // nell'archivio i file non sono in ordine di cartella (fino alla v36 contava anche una copia fuori dal pacchetto
+            // e, se veniva prima del file principale, l'intro non si aggiungeva)
+            bool levelHasC3Intro = !options.WithoutIntro && pc.Files.Any(f =>
+                f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) &&
+                !options.Exclude.Any(x => f.Path.Contains(x, StringComparison.OrdinalIgnoreCase)) &&
+                (!IsOtherLevelMapFile(f.Path, levelDirs) || InPcPackage(f.Path)) &&
+                HasC3Intro(f));
             int done = 0;
 
             // Intro di Crash 3 da aggiungere se manca: con --aggiungi-intro, oppure con --gioco crash3 per un livello che
@@ -1890,6 +2123,9 @@ namespace NST
                     string target = rename != null ? rename.Apply(path) : path;
                     if (included.Contains(target.ToLowerInvariant())) continue;
 
+                    bool otherLevelFile = IsOtherLevelMapFile(path, levelDirs);
+                    if (otherLevelFile) otherLevelTargets.Add(target);
+
                     index.TryGetValue(target.ToLowerInvariant(), out IgArchiveFile? original);
 
                     bool? unmodified = null;
@@ -1903,8 +2139,10 @@ namespace NST
 
                     // --originale-switch: file di un altro livello preso dall'originale Switch (le sue dipendenze si
                     // aggiungono dopo, dallo stesso archivio Switch)
-                    if (IsOtherLevelMapFile(path, levelDirs) && options.SwitchOriginals.Any(x => path.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                    if (otherLevelFile && options.SwitchOriginals.Any(x => path.Contains(x, StringComparison.OrdinalIgnoreCase)))
                     {
+                        foreach (string pattern in options.SwitchOriginals.Where(x => path.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                            matchedSwitchOriginals.Add(pattern);
                         if (original != null)
                         {
                             AddOriginal(original, "file di altri livelli presi dall'originale Switch (--originale-switch)");
@@ -1938,7 +2176,15 @@ namespace NST
                         {
                             if (original != null)
                             {
-                                lines.Add($"prova: collisione originale Switch riletta e riscritta: {HavokRoundTrip(original.Uncompress())}");
+                                // solo una prova: se non riesce, la conversione del file del PC va avanti lo stesso
+                                try
+                                {
+                                    lines.Add($"prova: collisione originale Switch riletta e riscritta: {HavokRoundTrip(original.Uncompress())}");
+                                }
+                                catch (Exception roundTripError)
+                                {
+                                    lines.Add($"prova: collisione originale Switch non riletta ({roundTripError.Message})");
+                                }
                             }
 
                             IgArchiveFile hkx = new IgArchiveFile(target, GameVersion.NSX);
@@ -2007,9 +2253,9 @@ namespace NST
                         }
 
                         // L'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer, Crash che esce dal portale) fa comparire
-                        // Crash: la zone info di un livello di Crash 3 la aspetta (vedi BuildRegistration)
+                        // Crash: la zone info di un livello di Crash 3 la aspetta (vedi BuildRegistration). Se il livello ce
+                        // l'ha gia' lo dice levelHasC3Intro, calcolato prima della conversione
                         bool hasIntro = igz.Objects.OfType<igEntity>().Any(e => e.GetComponent<common_C3_IntroSequenceData>() != null);
-                        if (hasIntro && !options.WithoutIntro) levelHasC3Intro = true;
 
                         // --senza-intro: toglie quell'intro
                         if (options.WithoutIntro && hasIntro)
@@ -2026,11 +2272,12 @@ namespace NST
                             }
                         }
 
-                        // File di un altro livello copiato dall'editor: il pacchetto del PC lo elenca, quindi il gioco carica
-                        // tutte le sue entita' e fanno parte del livello. Contenuto nel rapporto, --togli-entita e, con
-                        // --solo-usati, via le entita' che usano file che il gioco Switch non ha
-                        if (IsOtherLevelMapFile(path, levelDirs))
+                        // File di un altro livello copiato dall'editor. Se il pacchetto del PC lo elenca il gioco carica tutte le
+                        // sue entita', che fanno parte del livello; altrimenti usa solo gli oggetti a cui il livello fa
+                        // riferimento. Contenuto nel rapporto, --togli-entita e, solo per quelli nel pacchetto, --solo-usati
+                        if (otherLevelFile)
                         {
+                            bool inPcPackage = InPcPackage(path);
                             var references = new Dictionary<igEntity, HashSet<string>>();
                             HashSet<string> Refs(igEntity entity)
                             {
@@ -2043,7 +2290,7 @@ namespace NST
                                 Refs(entity).Where(n => !n.All(char.IsDigit) && !n.StartsWith("meta") && !availableNames.Contains(n)).OrderBy(n => n).ToList();
                             bool modified = false;
 
-                            DescribeOtherLevelFile(otherContent, path, igz, original, Refs, MissingRefs);
+                            DescribeOtherLevelFile(otherContent, path, igz, original, inPcPackage, Refs, MissingRefs);
 
                             var chosen = new HashSet<igObject>();
                             foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
@@ -2062,15 +2309,16 @@ namespace NST
                                 removedEntities.Add($"  --togli-entita, {path}: {chosen.Count} entita' ({removedObjects.Count} oggetti): {names}");
                             }
 
-                            if (options.OnlyUsed)
+                            if (options.OnlyUsed && inPcPackage)
                             {
-                                // Entita' che usano modelli che la Switch non ha (sulla Switch non si vedrebbero comunque). I prefab
-                                // (..._prefab, prefab_...) mancano anche nei livelli che funzionano: non contano
+                                // Decorazioni (solo modello e collisione) che usano modelli che la Switch non ha: sulla Switch non si
+                                // vedrebbero comunque. I prefab (..._prefab, prefab_...) mancano anche nei livelli che funzionano: non
+                                // contano. Le entita' con altri componenti (nemici, piattaforme...) restano
                                 var broken = new Dictionary<igObject, string>();
                                 foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
                                 {
                                     List<string> missingFiles = MissingRefs(candidate).Where(n => !n.EndsWith("_prefab") && !n.StartsWith("prefab_")).ToList();
-                                    if (missingFiles.Count > 0) broken[candidate] = "manca " + string.Join(", ", missingFiles);
+                                    if (missingFiles.Count > 0 && IsStaticDecoration(candidate)) broken[candidate] = "manca " + string.Join(", ", missingFiles);
                                     // Nemici dei livelli con la moto d'acqua (personaggi e quello che fanno comparire) in un livello
                                     // senza moto d'acqua: con quelli di Tell No Tales Tropical Escape resta su LOADING
                                     else if (!editorJetski && IsJetskiEnemy(candidate, Refs(candidate))) broken[candidate] = "nemico della moto d'acqua";
@@ -2196,9 +2444,10 @@ namespace NST
             {
                 foreach (IgArchiveFile file in sw.ByArchive[baseArchive])
                 {
-                    // The placement files of the level come only from the PC archive
+                    // I file di posizionamento del livello vengono solo dall'archivio PC; la collisione statica
+                    // (models/maps/...) e' quella del livello PC, quella dell'originale occuperebbe solo memoria
                     string lower = file.Path.ToLowerInvariant();
-                    if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/")) continue;
+                    if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/") || lower.StartsWith("models/maps/")) continue;
                     AddOriginal(file, "file del livello originale Switch aggiunti");
                 }
             }
@@ -2289,18 +2538,11 @@ namespace NST
             }
 
             // --solo-usati: modelli, materiali e texture che dopo lo sfoltimento non usa piu' nessun file del livello
-            if (options.OnlyUsed)
-            {
-                // Cartelle del livello: quella di uscita e quelle del PC (i file dell'originale di un livello
-                // ..._Custom presi dalla Switch tengono la cartella dell'originale)
-                var ownDirs = new List<string>(levelDirs);
-                if (output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir is string outDir) ownDirs.Add(outDir);
-                RemoveUnusedFiles(output, ownDirs, report);
-            }
+            if (options.OnlyUsed) RemoveUnusedFiles(output, report);
 
             // Il pacchetto elenca i file del livello, come quello del PC: i file di altri livelli (maps/...) che l'editor
-            // copia per gli oggetti presi da li' restano fuori. Nel pacchetto il gioco li caricherebbe interi, con tutte
-            // le loro entita' (quelli dei livelli con la moto d'acqua bloccano il caricamento: Tropical Escape)
+            // copia per gli oggetti presi da li' ci sono solo se li elenca il pacchetto del PC (il gioco li carica interi,
+            // con tutte le loro entita'); gli altri restano nell'archivio, fuori dal pacchetto
             try
             {
                 if (output.FindPackageFile() == null)
@@ -2310,11 +2552,14 @@ namespace NST
                 else
                 {
                     string? ownDir = output.Files.Select(f => PackageInfo(f.Path)).FirstOrDefault(p => p != null)?.dir;
-                    bool InPackage(string p) =>
-                        pcPackageList.Count == 0 ||
-                        !p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) ||
-                        pcPackageList.Contains(p) ||
-                        (ownDir != null && p.StartsWith("maps/" + ownDir + "/", StringComparison.OrdinalIgnoreCase));
+                    bool InPackage(string p)
+                    {
+                        if (pcPackageList.Count == 0 || !p.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) || pcPackageList.Contains(p)) return true;
+                        // una copia di un file di un altro livello resta fuori anche se finisce nella cartella del livello
+                        // (--sostituisci con il livello da cui l'editor l'ha copiata)
+                        if (otherLevelTargets.Contains(p)) return false;
+                        return ownDir != null && p.StartsWith("maps/" + ownDir + "/", StringComparison.OrdinalIgnoreCase);
+                    }
                     var levelFiles = output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
                     var outside = levelFiles.Where(f => !InPackage(f.Path)).ToList();
                     output.RebuildPackageFile(levelFiles.Where(f => InPackage(f.Path)).ToList(), out _);
@@ -2419,8 +2664,28 @@ namespace NST
                 }
 
                 EGameYear? forcedYear = options.Game == null ? null : LevelBuilder.GetGameYear(options.Game);
-                if (!BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                       options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode))
+                if (zoneTemplate == null && (forcedYear != null || poolSource != null))
+                    report.AppendLine("  ATTENZIONE: con --zoneinfo-da pc --gioco e --memoria non si applicano (cambiano solo la zone info presa da un originale)");
+                bool registered;
+                try
+                {
+                    registered = BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
+                                                   options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode);
+                }
+                catch (Exception registrationError)
+                {
+                    report.AppendLine($"  ERRORE nella registrazione del livello: {registrationError.GetType().Name}: {registrationError.Message}");
+                    registered = false;
+                    try
+                    {
+                        File.Delete(updatePath + ".tmp");
+                    }
+                    catch
+                    {
+                        // il file temporaneo resta: non cambia niente
+                    }
+                }
+                if (!registered)
                 {
                     updatePath = null;
                     Increment(counters, "errori");
@@ -2436,7 +2701,7 @@ namespace NST
                         output.AddFile(copy);
                     }
                     report.AppendLine($"Installa insieme {Path.GetFileName(outputPath)} e {Path.GetFileName(updatePath)} (sostituisce l'originale); avvio diretto: {levelId}");
-                    report.AppendLine("Con NST Pak Manager 1.7 basta il livello: update.pak lo crea l'app dai file update/ del livello");
+                    report.AppendLine("Con NST Pak Manager (1.7 o successivo) basta il livello: update.pak lo crea l'app dai file update/ del livello");
                 }
                 report.AppendLine();
             }
@@ -2467,7 +2732,7 @@ namespace NST
                 if (existing != null && Path.GetFileName(existing) != Path.GetFileName(outputPath)) File.Delete(existing);
             }
 
-            foreach (string pattern in options.SwitchOriginals.Where(x => !switchOriginalUsed.Any(l => l.Contains(x, StringComparison.OrdinalIgnoreCase))))
+            foreach (string pattern in options.SwitchOriginals.Where(x => !matchedSwitchOriginals.Contains(x)))
                 switchOriginalUsed.Add($"  --originale-switch {pattern}: nessun file di altri livelli con questo testo nel percorso");
             foreach (string filter in options.RemoveEntities.Where(f => !usedFilters.Contains(f)))
                 removedEntities.Add($"  --togli-entita {filter}: nessuna entita' trovata nei file di altri livelli");
@@ -2483,7 +2748,26 @@ namespace NST
 
             AppendMemoryReport(report, output, sw, sizeReference);
 
-            output.Save(outputPath);
+            // Scritto prima in un file temporaneo: se qualcosa va storto il vecchio archivio resta com'era
+            string? saveError = null;
+            try
+            {
+                output.Save(outputPath, temporaryPath: outputPath + ".tmp");
+            }
+            catch (Exception e)
+            {
+                saveError = $"{e.GetType().Name}: {e.Message}";
+                report.AppendLine($"ERRORE: archivio non scritto ({saveError})");
+                report.AppendLine();
+                try
+                {
+                    File.Delete(outputPath + ".tmp");
+                }
+                catch
+                {
+                    // il file temporaneo resta: non cambia niente
+                }
+            }
 
             if (entityLines.Count > 0)
             {
@@ -2496,10 +2780,10 @@ namespace NST
             if (otherContent.Length > 0)
             {
                 report.AppendLine("=== CONTENUTO DEI FILE DI ALTRI LIVELLI (prima delle modifiche) ===");
-                report.AppendLine("Il pacchetto del livello li elenca: il gioco carica tutte le loro entita'. Per ogni file: entita'");
-                report.AppendLine("raggruppate per tipo e componenti (quante, esempi, file che usano), quelle che usano file che il");
-                report.AppendLine("gioco Switch non ha (MANCA) e il confronto con l'originale Switch. Per toglierne alcune:");
-                report.AppendLine("--togli-entita <file>:<testo> (testo nel nome, nel tipo, nei componenti o nei file usati; * = tutte).");
+                report.AppendLine("Per ogni file: se e' nel pacchetto (il gioco carica tutte le sue entita') o fuori, entita' raggruppate");
+                report.AppendLine("per tipo e componenti (quante, esempi, file che usano), quelle che usano file che il gioco Switch non ha");
+                report.AppendLine("(MANCA) e il confronto con l'originale Switch. Per toglierne alcune: --togli-entita <file>:<testo>");
+                report.AppendLine("(testo nel nome, nel tipo, nei componenti o nei file usati; * = tutte).");
                 report.Append(otherContent);
                 report.AppendLine();
             }
@@ -2522,6 +2806,11 @@ namespace NST
 
             File.WriteAllText(reportPath, report.ToString());
             foreach (var (key, count) in counters.OrderBy(e => e.Key)) Console.WriteLine($"  {key}: {count}");
+            if (saveError != null)
+            {
+                Console.WriteLine($"ERRORE: archivio {outputPath} non scritto: {saveError} (dettagli in {reportPath})");
+                return 2;
+            }
             Console.WriteLine($"Archivio Switch scritto in {outputPath} ({output.Files.Count} file, dettagli in {reportPath})");
             if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
             else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
@@ -2531,7 +2820,7 @@ namespace NST
                 Console.WriteLine($"ATTENZIONE: il livello usa {missingReferences.Count} file che il gioco Switch non ha " +
                                   $"(per esempio {string.Join(", ", missingReferences.Keys.Take(3))}): il caricamento puo' bloccarsi. Elenco nel rapporto.");
             }
-            return 0;
+            return options.NewLevel && updatePath == null ? 1 : 0;
         }
 
         /// <summary>
@@ -2618,7 +2907,7 @@ namespace NST
                 template = FindZoneInfo(sw, zoneInfoTemplate);
                 if (template == null)
                 {
-                    report.AppendLine($"  ERRORE: --zoneinfo-da: zone info di {zoneInfoTemplate} non trovata nel dump");
+                    report.AppendLine($"  ERRORE: zone info di {zoneInfoTemplate} non trovata nel dump");
                     return false;
                 }
             }
@@ -2627,7 +2916,7 @@ namespace NST
             if (sw.ByArchive.TryGetValue(registerIn, out List<IgArchiveFile>? originals))
             {
                 foreach (IgArchiveFile file in originals) update.AddFile(file.Clone());
-                long size = originals.Sum(f => (long)f.GetData().Length);
+                long size = originals.Sum(f => (long)f.UncompressedSize);
                 report.AppendLine($"  {registerIn}.pak originale Switch: {originals.Count} file ({size / 1024} KB)");
             }
             else if (registerIn == "chunkinfos")
@@ -2653,13 +2942,13 @@ namespace NST
                 bool isZoneInfo = path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase);
                 if (isZoneInfo && template != null)
                 {
-                    report.AppendLine($"  zone info del PC non usata ({path}): --zoneinfo-da {zoneInfoTemplate}");
+                    report.AppendLine($"  zone info del PC non usata ({path}): al suo posto quella di {zoneInfoTemplate}");
                     try
                     {
                         if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo pcZone)
                         {
                             report.AppendLine("    PC: " + DescribeZoneInfo(pcZone));
-                            pcZoneInfo = pcZone;
+                            pcZoneInfo ??= pcZone;  // la prima, come per il gioco del livello (PcZoneInfoYear)
                         }
                     }
                     catch (Exception e)
@@ -2717,6 +3006,8 @@ namespace NST
                 string? oldName = zoneInfo._name;
                 zoneInfo._name = levelId;
                 if (ownSave) zoneInfo._saveName = levelId.Substring(levelId.LastIndexOf('/') + 1);
+                // nome nel menu di debug: quello del livello, non dell'originale (come per la zone info del PC, RenameZoneInfo)
+                if (zoneInfo._debugMenuName != null) zoneInfo._debugMenuName = rename?.ToName ?? levelId.Substring(levelId.LastIndexOf('/') + 1);
                 // --gioco: come "Crash Mode" nell'editor, cambia solo il gioco (anno) della zone info
                 if (forcedYear != null && zoneInfo._year != forcedYear.Value)
                 {
@@ -2803,7 +3094,8 @@ namespace NST
             ReplaceFile(update, chunkPackage.Path, packageData);
             embedded.Add((chunkPackage.Path, packageData));
 
-            update.Save(updatePath);
+            // prima in un file temporaneo: se qualcosa va storto quello vecchio resta com'era
+            update.Save(updatePath, temporaryPath: updatePath + ".tmp");
             report.AppendLine($"  scritto {updatePath} ({update.Files.Count} file)");
             return true;
         }
@@ -2855,18 +3147,27 @@ namespace NST
                                             List<(string path, byte[] data)> embedded, StringBuilder report)
         {
             List<string> options = GameplayModeManager.GetSpecialZoneInfoOptions(pcZone._build);
-            string? character = string.IsNullOrEmpty(pcZone._overrideCharacter) || pcZone._overrideCharacter == "Crash" ? null : pcZone._overrideCharacter;
-            if (options.Count == 0 && character == null) return;
+            static string? Special(string? name) => string.IsNullOrEmpty(name) || name == "Crash" ? null : name;
+            string? character = Special(pcZone._overrideCharacter);
 
-            if (character != null && zoneInfo._overrideCharacter != character)
+            // Personaggio: quello scelto nell'editor anche quando l'originale ne usa un altro (un livello ..._Custom
+            // di un livello di Coco passato a Crash nell'editor resta di Crash)
+            string? templateCharacter = Special(zoneInfo._overrideCharacter);
+            if (character != templateCharacter)
             {
-                report.AppendLine($"  personaggio dell'editor: {character}");
+                report.AppendLine($"  personaggio dell'editor: {character ?? "Crash"} (l'originale: {templateCharacter ?? "Crash"})");
                 zoneInfo._overrideCharacter = character;
+            }
+            // Veicolo: come il Play dell'editor, solo dalle opzioni speciali ({jetski}, {plane}); senza, nessuno
+            string? vehicle = options.Contains("jetski") ? "CocoJetski" : options.Contains("plane") ? "CrashCocoPlane" : null;
+            if (vehicle != zoneInfo._zoneVehicle)
+            {
+                report.AppendLine($"  veicolo: '{zoneInfo._zoneVehicle}' -> '{vehicle}' (come l'editor)");
+                zoneInfo._zoneVehicle = vehicle;
             }
             if (options.Count > 0)
             {
                 zoneInfo._build = GameplayModeManager.UpdateSpecialZoneInfoOptions(zoneInfo._build, options);
-                zoneInfo._zoneVehicle = options.Contains("jetski") ? "CocoJetski" : options.Contains("plane") ? "CrashCocoPlane" : zoneInfo._zoneVehicle;
                 report.AppendLine($"  modalita' dell'editor: {string.Join(", ", options)} (build '{zoneInfo._build}', veicolo '{zoneInfo._zoneVehicle}')");
             }
 
@@ -2875,9 +3176,13 @@ namespace NST
             if (options.Contains("hub")) report.AppendLine("  ATTENZIONE: l'opzione hub non viene convertita (servono i dati di sistema del gioco)");
             if (needData.Count == 0) return;
 
-            string name = (character ?? "Crash") + "_CharacterData.igz";
-            IgArchiveFile? source = sw.ByPath.Where(e => NamespaceUtils.GetFileName(e.Key).Equals(name, StringComparison.OrdinalIgnoreCase))
-                                             .Select(e => e.Value).FirstOrDefault();
+            // Come l'editor: <personaggio>_CharacterData.igz dall'archivio del personaggio (crash.pak, coco.pak), se c'e'
+            string characterName = character ?? "Crash";
+            string name = characterName + "_CharacterData.igz";
+            IgArchiveFile? source = (sw.ByArchive.GetValueOrDefault(characterName.ToLowerInvariant()) ?? [])
+                                        .FirstOrDefault(f => NamespaceUtils.GetFileName(f.Path).Equals(name, StringComparison.OrdinalIgnoreCase))
+                                    ?? sw.ByPath.Where(e => NamespaceUtils.GetFileName(e.Key).Equals(name, StringComparison.OrdinalIgnoreCase))
+                                                .Select(e => e.Value).FirstOrDefault();
             if (source == null)
             {
                 report.AppendLine($"  ERRORE: {name} non trovato nel dump: la modalita' {string.Join(", ", needData)} non si attiva");
@@ -2926,10 +3231,35 @@ namespace NST
         /// </summary>
         private static bool IsOtherLevelMapFile(string path, List<string> levelDirs)
         {
+            // senza il pacchetto del livello non si sa quali sono i file del livello: nessuno conta come di un altro livello
+            if (levelDirs.Count == 0) return false;
             string[] parts = path.Split('/');
             return parts.Length >= 4 && parts[0].Equals("maps", StringComparison.OrdinalIgnoreCase) &&
                    !levelDirs.Any(d => d.Equals(parts[1] + "/" + parts[2], StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>
+        /// Il file contiene l'intro dei livelli di Crash 3 (entita' con common_C3_IntroSequenceData)
+        /// </summary>
+        private static bool HasC3Intro(IgArchiveFile file)
+        {
+            try
+            {
+                return file.ToIgzFile().Objects.OfType<igEntity>().Any(e => e.GetComponent<common_C3_IntroSequenceData>() != null);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static readonly HashSet<string> _decorationComponents = ["CModelComponentData", "CStaticComponentData", "CStaticCollisionComponentData"];
+
+        /// <summary>
+        /// Decorazione: entita' semplice con solo modello, componente statico e collisione statica (rocce, muri, piante)
+        /// </summary>
+        private static bool IsStaticDecoration(igEntity entity) =>
+            entity.GetType() == typeof(igEntity) && entity.GetComponents().All(c => _decorationComponents.Contains(c.GetType().Name));
 
         /// <summary>
         /// File (namespace, in minuscolo) usati da un'entita' e dai suoi componenti: modelli, script, prefab...
@@ -2948,11 +3278,17 @@ namespace NST
                 igObject current = queue.Dequeue();
                 try
                 {
-                    foreach (NamedReference handle in current.GetHandles(version))
+                    foreach (NamedReference handle in ObjectReferences(current, version))
                     {
                         string ns = handle.namespaceName;
                         if (string.IsNullOrEmpty(ns) || ns.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
                         result.Add(ns.ToLowerInvariant());
+                    }
+                    // modelli e altri file indicati con il loro percorso (CModelComponentData._fileName, ...)
+                    foreach (string text in current.GetStrings(version))
+                    {
+                        if (text.Contains('/') && (text.EndsWith(".igz", StringComparison.OrdinalIgnoreCase) || text.EndsWith(".hkx", StringComparison.OrdinalIgnoreCase)))
+                            result.Add(NamespaceUtils.GetFileName(text, false).ToLowerInvariant());
                     }
                     foreach (igObject child in current.GetChildren(version))
                         if (child is not igEntity && visited.Add(child)) queue.Enqueue(child);
@@ -2999,7 +3335,7 @@ namespace NST
         /// Rapporto: contenuto di un file di un altro livello (entita' raggruppate per tipo e componenti, quelle che usano
         /// file che il gioco Switch non ha, altri oggetti) e confronto con l'originale Switch dello stesso file
         /// </summary>
-        private static void DescribeOtherLevelFile(StringBuilder sb, string path, IgzFile igz, IgArchiveFile? switchOriginal,
+        private static void DescribeOtherLevelFile(StringBuilder sb, string path, IgzFile igz, IgArchiveFile? switchOriginal, bool inPackage,
                                                    Func<igEntity, HashSet<string>> refs, Func<igEntity, List<string>> missingRefs)
         {
             try
@@ -3022,6 +3358,9 @@ namespace NST
                     }
                 }
                 sb.AppendLine($"{path}: {entities.Count} entita', {igz.Objects.Count} oggetti ({originalInfo})");
+                sb.AppendLine(inPackage
+                    ? "    nel pacchetto: il gioco carica tutte le sue entita'"
+                    : "    fuori dal pacchetto: il gioco usa solo gli oggetti a cui il livello fa riferimento (--solo-usati non lo tocca)");
 
                 if (originalNames != null)
                 {
@@ -3114,7 +3453,7 @@ namespace NST
                 if (fixups == null) continue;
                 foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
                     if (!string.IsNullOrEmpty(item.path)) Use(Names(Normalize(item.path)).First(), "dipendenza", file);
-                foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences))
+                foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
                     if (!string.IsNullOrEmpty(reference.namespaceName)) Use(reference.namespaceName.ToLowerInvariant(), "riferimento", file);
             }
 
@@ -3142,11 +3481,12 @@ namespace NST
 
         /// <summary>
         /// --solo-usati: toglie dall'archivio modelli, materiali e texture (igz in models/, materialinstances/, textures/,
-        /// loosetextures/) che nessun altro file del livello usa (dipendenze, handle e testi degli igz). Tutti gli altri
-        /// file, compresi quelli di altri livelli (fanno parte del livello), restano e fanno da punto di partenza.
-        /// Se un file non si legge non toglie niente.
+        /// loosetextures/) che nessun altro file del livello usa. I file usati si leggono dai fixup di ogni igz (dipendenze,
+        /// riferimenti per nome e tutti i testi, compresi quelli dentro liste e memorie, come i percorsi dei modelli), senza
+        /// leggere gli oggetti: anche un file che l'editor non sa rileggere conta. Tutti gli altri file, compresi quelli di
+        /// altri livelli, restano e fanno da punto di partenza. Il pacchetto non conta come uso (si ricostruisce dopo).
         /// </summary>
-        private static void RemoveUnusedFiles(IgArchive output, List<string> ownDirs, StringBuilder report)
+        private static void RemoveUnusedFiles(IgArchive output, StringBuilder report)
         {
             bool Removable(IgArchiveFile file)
             {
@@ -3166,30 +3506,18 @@ namespace NST
                 list.Add(file);
             }
 
-            // Il pacchetto elenca tutti i file: non conta come uso (si ricostruisce dopo con i file rimasti)
             var deps = new Dictionary<IgArchiveFile, HashSet<string>>();
-            var unreadable = new List<string>();
-            foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase)))
+            foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) &&
+                                                            !x.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase)))
             {
-                try
+                HashSet<string>? names = RawReferencedNames(file);
+                if (names == null)
                 {
-                    deps[file] = file.ToIgzFile().GetDependencies(GameVersion.NSX);
+                    report.AppendLine($"--solo-usati: {file.Path} non leggibile: non tolgo nessun file");
+                    report.AppendLine();
+                    return;
                 }
-                catch (Exception e)
-                {
-                    // Un file che l'editor non rilegge: i file che usa si leggono dai fixup (dipendenze e riferimenti per nome)
-                    try
-                    {
-                        deps[file] = RawDependencies(file.Uncompress());
-                        unreadable.Add($"  {file.Path} ({e.Message})");
-                    }
-                    catch (Exception rawError)
-                    {
-                        report.AppendLine($"--solo-usati: {file.Path} non leggibile ({e.Message}; {rawError.Message}): non tolgo nessun file");
-                        report.AppendLine();
-                        return;
-                    }
-                }
+                deps[file] = names;
             }
 
             var reached = new HashSet<IgArchiveFile>(files.Where(x => !Removable(x)));
@@ -3209,15 +3537,48 @@ namespace NST
             foreach (IgArchiveFile file in unused) output.RemoveFile(file);
             report.AppendLine("=== GRAFICA NON USATA (--solo-usati) ===");
             report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) di modelli, materiali e texture che nessun file del livello usa");
-            if (unreadable.Count > 0)
-            {
-                report.AppendLine($"file che l'editor non rilegge (i file che usano letti dai riferimenti): {unreadable.Count}");
-                foreach (string line in unreadable.Take(10)) report.AppendLine(line);
-            }
             foreach (IgArchiveFile file in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
                 report.AppendLine($"  {Mb((ulong)file.UncompressedSize),10}  {file.Path}");
             if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20}");
             report.AppendLine();
+        }
+
+        /// <summary>
+        /// Nomi (in minuscolo, senza cartella ne' estensione) di tutto quello che un igz nomina: dipendenze (TDEP), riferimenti
+        /// per nome a oggetti di altri file (EXNM, EXID) e tutti i testi (TSTR). Letti dai fixup, senza leggere gli oggetti.
+        /// null se il file non si legge
+        /// </summary>
+        private static HashSet<string>? RawReferencedNames(IgArchiveFile file)
+        {
+            // un file che non e' un igz (per esempio un .lng di testo) non nomina altri file
+            byte[] data;
+            try
+            {
+                data = file.Uncompress();
+            }
+            catch
+            {
+                return null;
+            }
+            if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return new HashSet<string>();
+            FixupCollection? fixups = RawFixups(file);
+            if (fixups == null) return null;
+            var names = new HashSet<string>();
+            void Add(string? value)
+            {
+                if (string.IsNullOrEmpty(value)) return;
+                string name = NamespaceUtils.GetFileName(value, false).ToLowerInvariant();
+                if (name.Length > 0) names.Add(name);
+            }
+            foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
+            {
+                Add(item.name);
+                Add(item.path);
+            }
+            foreach (string text in fixups.TSTR) Add(text);
+            foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+                Add(reference.namespaceName);
+            return names;
         }
 
         /// <summary>
@@ -3425,6 +3786,8 @@ namespace NST
             }
         }
 
-        private static bool IsGraphicsType(string typeName) => _graphicsTypes.Contains(typeName) || typeName.EndsWith("Material");
+        // CCollisionMaterial finisce per Material ma e' un dato della fisica, non grafica
+        private static bool IsGraphicsType(string typeName) =>
+            _graphicsTypes.Contains(typeName) || (typeName.EndsWith("Material") && typeName != "CCollisionMaterial");
     }
 }

@@ -36,12 +36,15 @@ procedura completa, dalla preparazione della Switch al primo livello, è nel
    `out\miolivello.pak`, perché sulla Switch gli archivi dei livelli sono tutti in minuscolo
    e il gioco li cerca così. Nel nome valgono lettere, cifre e `_` (gli spazi diventano `_`).
 5. **Installa sulla Switch** con [NST Pak Manager](https://github.com/alberdom88/nst-pak-manager):
-   carica l'archivio convertito nella cartella MEGA (o del PC) e nell'app premi **Y** sul
+   carica l'archivio convertito nella cartella MEGA (o del PC) e nell'app premi **A** sul
    livello. Serve solo l'archivio del livello: `update.pak` lo crea l'app.
 
 Il rapporto (`report.txt`) elenca cosa è stato convertito, cosa è stato preso dagli
 originali Switch, cosa è stato saltato e, con `--nuovo`, cosa è finito nella registrazione
 del livello (sezione *REGISTRAZIONE DEL LIVELLO*). Allegalo quando qualcosa non funziona.
+Il rapporto viene scritto anche quando l'archivio non si può salvare (per esempio perché è
+aperto in Eden): in quel caso il convertitore lo dice ed esce con un errore, e il vecchio
+archivio resta com'era (archivio e `update.pak` si scrivono prima in un file `.tmp`).
 
 ## Comando `converti`
 
@@ -51,10 +54,15 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
         [--solo-usati] [--togli-entita [file:]testo]... [--originale-switch <testo>]...
-        [--ctr <cartella_dump_ctr_switch>] [--senza-intro] [--registra-in update|chunkinfos]
-        [--gioco crash1|crash2|crash3] [--memoria modello|max|<livello>]
-        [--pc-originali <cartella_archives_pc>]
+        [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
+        [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
+        [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
 ```
+
+Un'opzione scritta male (`--solo-usato`), un'opzione senza il suo valore o con un valore non
+previsto (`--registra-in chunkinfo`) fermano il convertitore con un errore, invece di essere
+ignorate. L'archivio di uscita non può stare nella cartella del dump: il convertitore la
+leggerebbe come un file del gioco alla conversione successiva.
 
 - `<cartella_dump_switch>`: il dump RomFS del gioco Switch (la cartella che contiene
   `archives`); vengono letti tutti i `.pak` che contiene.
@@ -79,9 +87,10 @@ Dettagli:
 - `--nuovo`: il livello prende il nome del file di uscita (`out\MioLivello.pak` → livello
   `MioLivello`, archivio `miolivello.pak`, avvio diretto `crash1/miolivello/miolivello`).
   Se il nome è già quello di un livello del gioco la conversione si ferma (per sostituirlo
-  c'è `--sostituisci`); lo stesso se il livello nell'editor ha il nome di un originale
-  (`L101_NSanityBeach`), perché i suoi file sono quelli dell'originale: salvalo con un nome
-  nuovo o usa `--come-originale`. Come quando si preme *Play* nell'editor su un livello
+  c'è `--sostituisci`), e così con il nome di un altro archivio del gioco (`update`,
+  `chunkinfos`, `crash1`...). Si ferma anche se il livello nell'editor ha il nome di un
+  originale (`L101_NSanityBeach`), perché i suoi file sono quelli dell'originale: salvalo con
+  un nome nuovo o usa `--come-originale`. Come quando si preme *Play* nell'editor su un livello
   nuovo, il livello va registrato nel gioco (la sua *zone info* elencata nel pacchetto di `chunkInfos`, dentro
   `update.pak`). Il convertitore:
   - mette i file della registrazione nell'archivio del livello, nella cartella interna
@@ -91,17 +100,19 @@ Dettagli:
     registrazione), da usare **solo su Eden**, dove l'app non c'è.
 
   La zone info (i dati del livello per il gioco: a quale gioco appartiene, nome mostrato nel
-  caricamento, salvataggio...) viene presa da un livello originale Switch, cambiando solo il
-  nome e la voce di salvataggio: quella creata dall'editor, convertita, blocca il gioco
-  all'avvio diretto. Il livello nuovo appartiene allo stesso gioco dell'originale (Crash 1, 2
-  o 3) e ne eredita il resto, per esempio il nome mostrato nel caricamento (vedi
-  `--zoneinfo-da` e `--salvataggio`). La modalità scelta nell'editor viene riportata nella
-  zone info: personaggio (Coco), opzioni speciali (`{boulder}`, `{hog}`, `{jetski}`, ...) e
-  veicolo; per masso, cavalcature, jetpack e scavo il convertitore crea anche, come l'editor
-  quando premi Play, i dati del personaggio (`Crash_CharacterData.igz` o
-  `Coco_CharacterData.igz` dal dump Switch) collegati al livello, e li mette nella
-  registrazione. L'opzione hub non è convertita. `--senza-modalita` lascia la zone info
-  dell'originale com'è (per le prove).
+  caricamento, salvataggio...) viene presa da un livello originale Switch: quella creata
+  dall'editor, convertita, blocca il gioco all'avvio diretto. Della zone info dell'originale
+  cambiano il nome (anche quello del menu di debug) e la voce di salvataggio (vedi
+  `--salvataggio`); il gioco con `--gioco`, la memoria con `--memoria`; nei livelli di Crash 3
+  l'intro "magic moment" viene spenta. Il resto si eredita dall'originale, per esempio il nome
+  mostrato nel caricamento (vedi `--zoneinfo-da`). La modalità scelta nell'editor viene
+  riportata nella zone info come fa l'editor quando premi Play: personaggio (Crash o Coco, anche
+  quando l'originale ne usa un altro), opzioni speciali (`{boulder}`, `{hog}`, `{jetski}`, ...)
+  e veicolo (moto d'acqua o aereo solo con `{jetski}` o `{plane}`, altrimenti nessuno). Per
+  masso, cavalcature, jetpack e scavo il convertitore crea anche i dati del personaggio
+  (`Crash_CharacterData.igz` o `Coco_CharacterData.igz`, presi da `crash.pak`/`coco.pak` del
+  dump) collegati al livello, e li mette nella registrazione. L'opzione hub non è convertita.
+  `--senza-modalita` lascia la zone info dell'originale com'è (per le prove).
 - `--come-originale`: il livello prende il nome dell'originale da cui è stato creato e lo
   sostituisce, quindi si installa con il nome dell'archivio originale, in minuscolo come
   sulla Switch (`l112_roadtonowhere.pak`; l'app lo fa da sola, su Eden rinominalo così).
@@ -117,11 +128,12 @@ Dettagli:
   originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello del
   gioco impostato nell'editor (Crash Mode, che può essere diverso dalla cartella del
   livello): `L101_NSanityBeach`, `L201_TurtleWoods` o `L301_ToadVillage`. Con `pc` usa la
-  zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto.
-  Se il livello è di Crash 3 ma non ha l'intro di Crash 3 (Crash che esce dal portale), nella
-  zone info presa dall'originale l'intro viene spenta: altrimenti il gioco aspetta un'intro
-  che non c'è e Crash non compare. Se Crash continua a non comparire,
-  `--zoneinfo-da L101_NSanityBeach` funziona (il livello segue però le regole di Crash 1).
+  zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto (e
+  `--gioco` e `--memoria` non si applicano). Nella zone info di Crash 3 presa da un originale
+  l'intro "magic moment" viene sempre spenta: accesa, il gioco aspetta un'intro che non c'è e
+  Crash non compare; l'intro del livello (Crash che esce dal portale) parte lo stesso. Se Crash
+  continua a non comparire, `--zoneinfo-da L101_NSanityBeach` funziona (il livello segue però
+  le regole di Crash 1).
 - `--gioco crash1|crash2|crash3` (con `--nuovo`): il livello si gioca con le regole di quel gioco
   (mosse, interfaccia, reliquie), qualunque gioco fosse impostato nell'editor. Il livello passa
   nella cartella di quel gioco (`crash3/<livello>/<livello>`) e prende la zone info del primo
@@ -142,8 +154,9 @@ Dettagli:
   info (gemme, casse e tempi finiscono su quel livello).
 - `--registra-in` (con `--nuovo`, per le prove): dove registrare il livello. `update`
   (predefinito) scrive `update.pak` come l'editor PC; `chunkinfos` scrive invece una copia di
-  `chunkInfos.pak` (l'archivio con le zone info di tutti i livelli del gioco) con dentro anche
-  quella del livello nuovo: si installa al posto di `update.pak`.
+  `chunkInfos.pak` (l'archivio con le zone info di tutti i livelli del gioco, con il nome che
+  ha nel dump) con dentro anche quella del livello nuovo: si installa al posto del
+  `chunkInfos.pak` del gioco, e `update.pak` non viene scritto.
 - `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
   può ripetere). Per esempio `--escludi Octane` toglie gli asset importati da Crash Team Racing,
   che la Switch non ha: il livello si carica senza quella parte di grafica.
@@ -158,9 +171,11 @@ Dettagli:
 - `--aggiungi-intro` (prova): se il livello non ha l'intro di Crash 3 (Crash che esce dal portale),
   la copia da Gone Tomorrow della Switch, con le stesse impostazioni che usa l'editor per un
   livello nuovo di Crash 3, insieme ai file che le servono (elencati nel rapporto). Con
-  `--gioco crash3` è automatica per i livelli di Crash 1 e 2. Nella zone info di un livello di
-  Crash 3 l'intro "magic moment" del livello originale viene sempre spenta: accesa, Crash non
-  compare.
+  `--gioco crash3` è automatica per i livelli di Crash 1 e 2. Conta come intro già presente
+  quella nei file del livello o nei file di altri livelli che stanno nel pacchetto; le copie
+  fuori dal pacchetto no (fino alla v36 bastava una copia di un livello di Crash 3 presa per un
+  solo oggetto per non aggiungerla). Nella zone info di un livello di Crash 3 l'intro "magic
+  moment" del livello originale viene sempre spenta: accesa, Crash non compare.
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
   esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
   non parte, Crash non compare e non si può muovere.
@@ -172,32 +187,36 @@ Dettagli:
   (Tropical Escape) hanno nel pacchetto PC anche i file interi di altri livelli, che il gioco
   carica con tutte le loro entità: vedi `--solo-usati`, `--togli-entita` e `--originale-switch`.
 - Contenuto dei file di altri livelli: il rapporto ha la sezione `CONTENUTO DEI FILE DI ALTRI
-  LIVELLI`, con le entità di ognuno raggruppate per tipo e componenti (quante, esempi di nomi, file
-  che usano), quelle che usano file che il gioco Switch non ha (`MANCA ...`), gli altri oggetti e
-  il confronto con l'originale Switch dello stesso file (stesse entità, o quante in più e in
-  meno). La sezione `DIPENDENZE (TDEP) DEI FILE CONVERTITI CHE NON SONO NELL'ARCHIVIO` elenca i
-  file che i file convertiti caricano prima di sé e che sulla Switch sono solo nell'archivio di
-  un altro livello, o in nessuno: il gioco non li trova.
+  LIVELLI`. Per ognuno dice se è nel pacchetto (il gioco carica tutte le sue entità) o fuori (il
+  gioco usa solo gli oggetti a cui il livello fa riferimento), elenca le entità raggruppate per
+  tipo e componenti (quante, esempi di nomi, file che usano), quelle che usano file che il gioco
+  Switch non ha (`MANCA ...`), gli altri oggetti e il confronto con l'originale Switch dello
+  stesso file (stesse entità, o quante in più e in meno). La sezione `FILE USATI DAL LIVELLO CHE
+  SULLA SWITCH SONO SOLO NEGLI ARCHIVI DI ALTRI LIVELLI` elenca i file che i file convertiti
+  usano e che sulla Switch stanno solo nell'archivio di un altro livello: il gioco non li trova.
 - `--solo-usati`: i file di altri livelli che l'editor mette nel pacchetto fanno parte del
   livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello come
   il pavimento), quindi restano. Da quei file toglie solo:
-  - le entità che usano modelli che il gioco Switch non ha (sulla Switch non si vedrebbero
-    comunque; i prefab mancanti non contano, mancano anche nei livelli che funzionano);
+  - le decorazioni (entità con solo modello e collisione: rocce, muri, piante) che usano modelli
+    che il gioco Switch non ha: sulla Switch non si vedrebbero comunque. Nemici, piattaforme e
+    le altre entità restano anche se manca qualcosa; i prefab mancanti non contano, mancano
+    anche nei livelli che funzionano;
   - i nemici dei livelli con la moto d'acqua (`Jetski_Enemy_...`: squalo, assistenti sulla barca
     e sull'albero con l'ancora, e quello che fanno comparire), se il livello non è con la moto
     d'acqua: con quelli di Tell No Tales, Tropical Escape resta su LOADING. I cannoni delle barche
     restano.
 
-  Poi toglie dall'archivio modelli, materiali e texture che nessun file del livello usa più. Il
-  rapporto elenca le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA
-  NON USATA`). Nella v35 l'opzione contava come file mancante anche `metaobject` (i tipi del
-  motore) e toglieva tutti i nemici, i massi e le staccionate dei file di altri livelli: dalla v36
-  restano.
-- `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli le
-  entità che hanno il testo nel nome, nel tipo, nei componenti o nei file che usano. Con
-  `file:` solo dai file con quel testo nel percorso; `*` le toglie tutte. Serve a trovare quali
-  entità bloccano il gioco, guardando la sezione `CONTENUTO DEI FILE DI ALTRI LIVELLI`: per
-  esempio `--togli-entita L318_TellNoTales:*` lascia il file ma senza entità,
+  I file di altri livelli fuori dal pacchetto non si toccano. Poi toglie dall'archivio modelli,
+  materiali e texture che nessun file del livello usa più (i file usati si leggono da tutti i
+  riferimenti e da tutti i testi degli igz, compresi i percorsi dei modelli). Il rapporto elenca
+  le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA NON USATA`).
+  Nella v35 l'opzione contava come file mancante anche `metaobject` (i tipi del motore) e
+  toglieva tutti i nemici, i massi e le staccionate dei file di altri livelli: dalla v36 restano.
+- `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli (nel
+  pacchetto e fuori) le entità che hanno il testo nel nome, nel tipo, nei componenti o nei file
+  che usano. Con `file:` solo dai file con quel testo nel percorso; `*` le toglie tutte. Serve a
+  trovare quali entità bloccano il gioco, guardando la sezione `CONTENUTO DEI FILE DI ALTRI
+  LIVELLI`: per esempio `--togli-entita L318_TellNoTales:*` lascia il file ma senza entità,
   `--togli-entita L305_MakinWaves:jetski` toglie da Makin' Waves quelle che parlano di jetski.
   I file del livello stesso non si toccano (quelli si cambiano nell'editor).
 - `--originale-switch <testo>` (prova, si può ripetere): i file di altri livelli con il testo
@@ -307,10 +326,15 @@ Cambiano anche: versione dell'archivio (12), cartella interna (`nx`), intestazio
 (4 byte), piattaforma negli igz (2). I file Havok della Switch (collisione statica) usano la
 stessa struttura di quelli CTR (`reusePaddingOptimization`), che l'editor conosce già.
 
-Quando un livello cambia nome (`--come-originale`, `--sostituisci`) vengono rinominati anche
-i riferimenti interni: namespace degli igz, nomi nella collisione statica, chiavi della
-tabella delle collisioni (`hash del namespace << 32 | hash dell'oggetto`) e voci del
-pacchetto.
+Quando un livello cambia nome o cartella (`--nuovo` con un nome diverso da quello
+dell'editor, `--gioco`, `--come-originale`, `--sostituisci`) cambiano solo i percorsi dei file
+dei livelli (`maps/`, `models/maps/`, `packages/generated/maps/` e la zone info in `update/`):
+la cartella del livello e il nome del livello nei nomi dei file, solo come parola intera
+(`Custom_Level_Art.igz`, `StaticCollision_Custom_Level.hkx`, non `Custom_Level2`). Gli asset
+(modelli, script, texture) tengono il loro percorso, così si trovano tra gli originali Switch.
+Vengono rinominati anche i riferimenti interni: namespace degli igz (tutti, anche quelli dentro
+liste e memorie), nomi nella collisione statica, chiavi della tabella delle collisioni
+(`hash del namespace << 32 | hash dell'oggetto`) e voci del pacchetto.
 
 Il codice è in `src/Switch/SwitchTools.cs` (comandi) e `src/Utils/SwitchLayout.cs`
 (struttura degli oggetti). La build per Windows la produce GitHub Actions
