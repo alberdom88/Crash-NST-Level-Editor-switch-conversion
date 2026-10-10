@@ -1,0 +1,39 @@
+Dimensioni Switch note: 1578
+Tipi non presenti nell'editor: 2
+    1551  Computed, verifica PC ok, dimensione giusta
+      12  Computed, verifica PC ok, dimensione SBAGLIATA
+       6  Computed, verifica PC no, dimensione giusta
+       4  CTR, verifica PC no, dimensione giusta
+       2  CTR, verifica PC ok, dimensione giusta
+       1  NST, verifica PC no, dimensione giusta
+
+=== CAMPI SOLO PC (tolti nella versione Switch): 8 gruppi ===
+  CAccoladeData: CAccoladeData._steamAchievementId (tipi corretti: +1)
+  CAccoladeGraphGoalData: CAccoladeGoalData._steamStatId (tipi corretti: +7)
+  CGuiBehaviorDialogBoxOption: CGuiBehavior._shoudFocusOnHover, CGuiBehavior._touchSignal (tipi corretti: +3)
+  CGuiBehaviorNavigationItem: CGuiBehaviorNavigationItem._animFocusabilityOn, CGuiBehaviorNavigationItem._animFocusabilityOff (tipi corretti: +2)
+  CPlayerJumpComponentData: CPlayerJumpComponentData._xyMovementModifier, CPlayerJumpComponentData._xyMovementModifierThreshold (tipi corretti: +1)
+  igGuiList: igGuiList._centerAfterAlign (tipi corretti: +1)
+  CGuiBehaviorSoundVolumeOption: CGuiBehaviorBaseNumberOption._decrementPlaceable, CGuiBehaviorBaseNumberOption._incrementPlaceable (tipi corretti: +1)
+  CFxaaRenderPass: CFxaaRenderPass._sharpness, CFxaaRenderPass._fxaaLowMaterial, CFxaaRenderPass._fxaaMediumMaterial (tipi corretti: +1)
+
+=== TIPI CON DIMENSIONE SBAGLIATA (12) ===
+  CCameraAction: calcolata 16, reale 56 (Computed, completata con byte vuoti)
+  CCrashBandicootGuiSystemData: calcolata 704, reale 648 (Computed)
+  CDebugRenderingData: calcolata 368, reale 384 (Computed, completata con byte vuoti)
+  CGlobalPlatformStrings: calcolata 1824, reale 1592 (Computed)
+  CGuiBehaviorButtonText: calcolata 160, reale 40 (Computed)
+  CGuiBehaviorSetPrimaryController: calcolata 232, reale 256 (Computed, completata con byte vuoti)
+  CLoadAllHeroesAction: calcolata 16, reale 96 (Computed, completata con byte vuoti)
+  CLoadHeroesAction: calcolata 16, reale 96 (Computed, completata con byte vuoti)
+  COpenUiAction: calcolata 16, reale 56 (Computed, completata con byte vuoti)
+  CSmokeAction: calcolata 16, reale 120 (Computed, completata con byte vuoti)
+  CSmokeActionBaseList: calcolata 40, reale 56 (Computed, completata con byte vuoti)
+  igRenderTarget: calcolata 200, reale 224 (Computed, completata con byte vuoti)
+
+=== CAMPI SOVRAPPOSTI O FUORI DALL'OGGETTO (1) ===
+  CAudioGraphDriverModeRubberBurning: _isAlreadyUsed [48-49) sovrapposto a _idleEngineValue [48-52)
+
+=== MESSAGGI (0) ===
+
+Rapporto scritto in switch_layout.txt
