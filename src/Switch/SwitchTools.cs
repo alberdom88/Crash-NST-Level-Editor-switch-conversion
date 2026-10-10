@@ -86,6 +86,12 @@ namespace NST
             // --nuovo: memoria del livello nella zone info: "modello" (quella del livello originale da cui viene la
             // zone info), "max" (la piu' grande tra i livelli originali) o il nome di un livello originale
             public string Memory = "modello";
+            // converti: entita' da togliere dai file di altri livelli copiati dall'editor, "[file:]testo" (testo nel
+            // nome, nel tipo, nei componenti o nei file che usa; * = tutte), per trovare quelle che bloccano il gioco
+            public List<string> RemoveEntities = [];
+            // converti: file di altri livelli (testo nel percorso) presi dall'originale Switch invece di convertire
+            // la copia del PC, con le loro dipendenze dallo stesso archivio Switch
+            public List<string> SwitchOriginals = [];
         }
 
         public static int Run(string[] args)
@@ -162,6 +168,8 @@ namespace NST
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
+                else if (name == "--originale-switch" && hasValue) { options.SwitchOriginals.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else i++;
             }
             return options;
@@ -174,7 +182,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1143,6 +1151,25 @@ namespace NST
         }
 
         /// <summary>
+        /// Fixup di un igz (dipendenze TDEP, riferimenti per nome), letti senza leggere gli oggetti; null se non si leggono
+        /// </summary>
+        private static FixupCollection? RawFixups(IgArchiveFile file)
+        {
+            try
+            {
+                byte[] data = file.Uncompress();
+                if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return null;
+                using var reader = new BinaryReader(new MemoryStream(data));
+                reader.BaseStream.Position = BitConverter.ToInt32(data, 0x18);
+                return FixupCollection.Parse(reader);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Namespaces referenced by an igz file (TDEP dependencies and named references),
         /// read from the fixups only: it doesn't depend on the object layouts
         /// </summary>
@@ -1750,9 +1777,17 @@ namespace NST
                 }
             }
 
-            // Entita' "globali" (mondo, partenza, intro, fine livello) nei file di altri livelli copiati dall'editor:
-            // elencate nel rapporto, tolte con --solo-usati
-            var otherGlobals = new List<string>();
+            // File di altri livelli copiati dall'editor: contenuto (per il rapporto) ed entita' tolte
+            var otherContent = new StringBuilder();
+            var removedEntities = new List<string>();
+            var switchOriginalUsed = new List<string>();
+            var usedFilters = new HashSet<string>();
+
+            // Nomi dei file che il livello puo' usare: quelli del gioco Switch e quelli dell'archivio PC
+            var availableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string name in index.Keys.Concat(pc.Files.Select(f => f.Path)))
+                foreach (string alias in NameAliases(NamespaceUtils.GetFileName(name, false).ToLowerInvariant()))
+                    availableNames.Add(alias);
             bool levelHasC3Intro = false;
             int done = 0;
 
@@ -1863,6 +1898,19 @@ namespace NST
 
                     bool levelContent = otherLevelsFromSwitch ? IsLevelContent(path, levels, levelDirs) : IsLevelContentAll(path, levels);
                     bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
+
+                    // --originale-switch: file di un altro livello preso dall'originale Switch (le sue dipendenze si
+                    // aggiungono dopo, dallo stesso archivio Switch)
+                    if (IsOtherLevelMapFile(path, levelDirs) && options.SwitchOriginals.Any(x => path.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (original != null)
+                        {
+                            AddOriginal(original, "file di altri livelli presi dall'originale Switch (--originale-switch)");
+                            switchOriginalUsed.Add($"  {target}: originale Switch ({sw.ArchiveOf.GetValueOrDefault(original) ?? "?"}.pak) al posto della copia PC");
+                            continue;
+                        }
+                        switchOriginalUsed.Add($"  {target}: non c'e' nel gioco Switch, convertito dal PC");
+                    }
 
                     if (original != null)
                     {
@@ -1976,28 +2024,58 @@ namespace NST
                             }
                         }
 
-                        igz.GameVersion = GameVersion.NSX;
-                        string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
-
-                        // File di un altro livello: le sue entita' globali (mondo, partenza, intro, fine livello) servono al
-                        // livello da cui viene, non a questo. Con --solo-usati si tolgono
-                        string[] pathParts = path.Split('/');
-                        if (pathParts.Length >= 4 && pathParts[0].Equals("maps", StringComparison.OrdinalIgnoreCase) &&
-                            !levelDirs.Any(d => d.Equals(pathParts[1] + "/" + pathParts[2], StringComparison.OrdinalIgnoreCase)))
+                        // File di un altro livello copiato dall'editor: il pacchetto del PC lo elenca, quindi il gioco carica
+                        // tutte le sue entita' e fanno parte del livello. Contenuto nel rapporto, --togli-entita e, con
+                        // --solo-usati, via le entita' che usano file che il gioco Switch non ha
+                        if (IsOtherLevelMapFile(path, levelDirs))
                         {
-                            var globals = igz.Objects.OfType<igEntity>().Where(IsLevelGlobalEntity).Cast<igObject>().ToHashSet();
-                            if (globals.Count > 0)
+                            var references = new Dictionary<igEntity, HashSet<string>>();
+                            HashSet<string> Refs(igEntity entity)
                             {
-                                string names = string.Join(", ", globals.Select(g => $"{g.ObjectName ?? "?"} [{g.GetType().Name}]"));
-                                if (options.OnlyUsed)
+                                if (!references.TryGetValue(entity, out HashSet<string>? found)) references[entity] = found = EntityReferences(entity, igz);
+                                return found;
+                            }
+                            List<string> MissingRefs(igEntity entity) =>
+                                Refs(entity).Where(n => !n.All(char.IsDigit) && !availableNames.Contains(n)).OrderBy(n => n).ToList();
+
+                            DescribeOtherLevelFile(otherContent, path, igz, original, Refs, MissingRefs);
+
+                            var chosen = new HashSet<igObject>();
+                            foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
+                                foreach (string filter in options.RemoveEntities)
+                                    if (EntityFilterMatches(filter, path, candidate, Refs(candidate)))
+                                    {
+                                        chosen.Add(candidate);
+                                        usedFilters.Add(filter);
+                                    }
+                            if (chosen.Count > 0)
+                            {
+                                string names = string.Join(", ", chosen.Take(12).Select(e => e.ObjectName ?? "?")) + (chosen.Count > 12 ? $" e altre {chosen.Count - 12}" : "");
+                                HashSet<igObject> removedObjects = igz.Remove(chosen);
+                                counters["entita' tolte (--togli-entita)"] = counters.GetValueOrDefault("entita' tolte (--togli-entita)") + chosen.Count;
+                                removedEntities.Add($"  --togli-entita, {path}: {chosen.Count} entita' ({removedObjects.Count} oggetti): {names}");
+                            }
+
+                            if (options.OnlyUsed)
+                            {
+                                // I prefab (..._prefab, prefab_...) mancano anche nei livelli che funzionano: non contano
+                                HashSet<igObject> broken = igz.Objects.OfType<igEntity>()
+                                    .Where(e => MissingRefs(e).Any(n => !n.EndsWith("_prefab") && !n.StartsWith("prefab_")))
+                                    .Cast<igObject>().ToHashSet();
+                                if (broken.Count > 0)
                                 {
-                                    HashSet<igObject> removedGlobals = igz.Remove(globals);
-                                    Increment(counters, "entita' globali tolte da file di altri livelli (--solo-usati)");
-                                    otherGlobals.Add($"  tolte da {path}: {names} ({removedGlobals.Count} oggetti)");
+                                    string names = string.Join(", ", broken.Take(12).Select(e => $"{e.ObjectName ?? "?"} ({string.Join(", ", MissingRefs((igEntity)e))})")) +
+                                                   (broken.Count > 12 ? $" e altre {broken.Count - 12}" : "");
+                                    HashSet<igObject> removedObjects = igz.Remove(broken);
+                                    counters["entita' tolte perche' usano file che la Switch non ha (--solo-usati)"] =
+                                        counters.GetValueOrDefault("entita' tolte perche' usano file che la Switch non ha (--solo-usati)") + broken.Count;
+                                    removedEntities.Add($"  --solo-usati, {path}: {broken.Count} entita' ({removedObjects.Count} oggetti): {names}");
                                 }
-                                else otherGlobals.Add($"  {path}: {names}");
                             }
                         }
+
+                        igz.GameVersion = GameVersion.NSX;
+                        string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
 
                         // Intro di Crash 3 aggiunta al file principale del livello (copiata da Gone Tomorrow della Switch)
                         if (addIntro && mainFile && !hasIntro && !levelHasC3Intro)
@@ -2361,15 +2439,19 @@ namespace NST
                 if (existing != null && Path.GetFileName(existing) != Path.GetFileName(outputPath)) File.Delete(existing);
             }
 
-            if (otherGlobals.Count > 0)
+            foreach (string pattern in options.SwitchOriginals.Where(x => !switchOriginalUsed.Any(l => l.Contains(x, StringComparison.OrdinalIgnoreCase))))
+                switchOriginalUsed.Add($"  --originale-switch {pattern}: nessun file di altri livelli con questo testo nel percorso");
+            foreach (string filter in options.RemoveEntities.Where(f => !usedFilters.Contains(f)))
+                removedEntities.Add($"  --togli-entita {filter}: nessuna entita' trovata nei file di altri livelli");
+            if (removedEntities.Count > 0 || switchOriginalUsed.Count > 0)
             {
-                report.AppendLine($"=== ENTITA' GLOBALI NEI FILE DI ALTRI LIVELLI ({otherGlobals.Count} file) ===");
-                report.AppendLine(options.OnlyUsed
-                    ? "Mondo, partenza, intro e fine livello dei livelli da cui l'editor ha copiato i file: tolte (--solo-usati)."
-                    : "Mondo, partenza, intro e fine livello dei livelli da cui l'editor ha copiato i file: con --solo-usati si tolgono.");
-                foreach (string line in otherGlobals) report.AppendLine(line);
+                report.AppendLine("=== FILE DI ALTRI LIVELLI CAMBIATI ===");
+                foreach (string line in switchOriginalUsed) report.AppendLine(line);
+                foreach (string line in removedEntities) report.AppendLine(line);
                 report.AppendLine();
             }
+
+            AppendMissingDependencies(report, output, fromSwitch, sw);
 
             AppendMemoryReport(report, output, sw, sizeReference);
 
@@ -2380,6 +2462,17 @@ namespace NST
                 report.AppendLine($"=== ENTITA' DEL FILE PRINCIPALE DEL LIVELLO ({entityLines.Count}) ===");
                 foreach (string line in entityLines.Take(200)) report.AppendLine(line);
                 if (entityLines.Count > 200) report.AppendLine($"  ... e altre {entityLines.Count - 200}");
+                report.AppendLine();
+            }
+
+            if (otherContent.Length > 0)
+            {
+                report.AppendLine("=== CONTENUTO DEI FILE DI ALTRI LIVELLI (prima delle modifiche) ===");
+                report.AppendLine("Il pacchetto del livello li elenca: il gioco carica tutte le loro entita'. Per ogni file: entita'");
+                report.AppendLine("raggruppate per tipo e componenti (quante, esempi, file che usano), quelle che usano file che il");
+                report.AppendLine("gioco Switch non ha (MANCA) e il confronto con l'originale Switch. Per toglierne alcune:");
+                report.AppendLine("--togli-entita <file>:<testo> (testo nel nome, nel tipo, nei componenti o nei file usati; * = tutte).");
+                report.Append(otherContent);
                 report.AppendLine();
             }
 
@@ -2801,13 +2894,214 @@ namespace NST
         }
 
         /// <summary>
-        /// Entita' che servono al funzionamento di un livello intero: il mondo (CWorldEntity, con la modalita' del livello,
-        /// per esempio la moto d'acqua), la partenza, l'intro di Crash 3 e il teletrasporto di fine livello
+        /// File di un altro livello copiato dall'editor: maps/<gioco>/<livello>/... fuori dalle cartelle del livello
         /// </summary>
-        private static bool IsLevelGlobalEntity(igEntity entity) =>
-            entity is CWorldEntity || entity is CPlayerStartEntity ||
-            entity.GetComponent<common_C3_IntroSequenceData>() != null ||
-            entity.GetComponent<common_LevelEndTeleporterData>() != null;
+        private static bool IsOtherLevelMapFile(string path, List<string> levelDirs)
+        {
+            string[] parts = path.Split('/');
+            return parts.Length >= 4 && parts[0].Equals("maps", StringComparison.OrdinalIgnoreCase) &&
+                   !levelDirs.Any(d => d.Equals(parts[1] + "/" + parts[2], StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// File (namespace, in minuscolo) usati da un'entita' e dai suoi componenti: modelli, script, prefab...
+        /// Non entra nelle altre entita' collegate e non conta il file stesso
+        /// </summary>
+        private static HashSet<string> EntityReferences(igEntity entity, IgzFile igz)
+        {
+            GameVersion version = igz.GameVersion;
+            string own = igz.GetName(false);
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var visited = new HashSet<igObject> { entity };
+            var queue = new Queue<igObject>();
+            queue.Enqueue(entity);
+            while (queue.Count > 0)
+            {
+                igObject current = queue.Dequeue();
+                try
+                {
+                    foreach (NamedReference handle in current.GetHandles(version))
+                    {
+                        string ns = handle.namespaceName;
+                        if (string.IsNullOrEmpty(ns) || ns.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
+                        result.Add(ns.ToLowerInvariant());
+                    }
+                    foreach (igObject child in current.GetChildren(version))
+                        if (child is not igEntity && visited.Add(child)) queue.Enqueue(child);
+                }
+                catch
+                {
+                    // un oggetto che non si esplora non cambia il resto
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// --togli-entita "[file:]testo": il file (testo nel percorso) e il testo nel nome dell'entita', nel tipo, nei
+        /// componenti o nei file che usa. Testo vuoto o * = tutte le entita' del file
+        /// </summary>
+        private static bool EntityFilterMatches(string filter, string path, igEntity entity, HashSet<string> references)
+        {
+            string file = "", text = filter.Trim();
+            int colon = text.IndexOf(':');
+            if (colon >= 0)
+            {
+                file = text.Substring(0, colon).Trim();
+                text = text.Substring(colon + 1).Trim();
+            }
+            if (file.Length > 0 && !path.Contains(file, StringComparison.OrdinalIgnoreCase)) return false;
+            if (text.Length == 0 || text == "*") return true;
+            if ((entity.ObjectName ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)) return true;
+            if (entity.GetType().Name.Contains(text, StringComparison.OrdinalIgnoreCase)) return true;
+            if (entity.GetComponents().Any(c => c.GetType().Name.Contains(text, StringComparison.OrdinalIgnoreCase))) return true;
+            return references.Any(r => r.Contains(text, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Rapporto: contenuto di un file di un altro livello (entita' raggruppate per tipo e componenti, quelle che usano
+        /// file che il gioco Switch non ha, altri oggetti) e confronto con l'originale Switch dello stesso file
+        /// </summary>
+        private static void DescribeOtherLevelFile(StringBuilder sb, string path, IgzFile igz, IgArchiveFile? switchOriginal,
+                                                   Func<igEntity, HashSet<string>> refs, Func<igEntity, List<string>> missingRefs)
+        {
+            try
+            {
+                List<igEntity> entities = igz.Objects.OfType<igEntity>().ToList();
+                string originalInfo = "non c'e' nel gioco Switch";
+                HashSet<string>? originalNames = null;
+                if (switchOriginal != null)
+                {
+                    try
+                    {
+                        IgzFile original = switchOriginal.ToIgzFile();
+                        List<igEntity> originalEntities = original.Objects.OfType<igEntity>().ToList();
+                        originalNames = originalEntities.Select(e => e.ObjectName ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        originalInfo = $"originale Switch: {originalEntities.Count} entita', {original.Objects.Count} oggetti";
+                    }
+                    catch (Exception e)
+                    {
+                        originalInfo = $"originale Switch non leggibile: {e.Message}";
+                    }
+                }
+                sb.AppendLine($"{path}: {entities.Count} entita', {igz.Objects.Count} oggetti ({originalInfo})");
+
+                if (originalNames != null)
+                {
+                    var names = entities.Select(e => e.ObjectName ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    List<string> added = entities.Select(e => e.ObjectName ?? "?").Where(n => !originalNames.Contains(n)).ToList();
+                    int missing = originalNames.Count(n => !names.Contains(n));
+                    sb.AppendLine(added.Count == 0 && missing == 0
+                        ? "    stesse entita' dell'originale Switch"
+                        : $"    rispetto all'originale Switch: {added.Count} entita' in piu'{(added.Count > 0 ? $" (es. {string.Join(", ", added.Take(5))})" : "")}, {missing} in meno");
+                }
+
+                var groups = entities
+                    .GroupBy(e => $"[{e.GetType().Name}] {string.Join(", ", e.GetComponents().Select(c => c.GetType().Name).OrderBy(n => n))}")
+                    .OrderByDescending(g => g.Count())
+                    .ToList();
+                foreach (var group in groups.Take(60))
+                {
+                    string examples = string.Join(", ", group.Take(3).Select(e => e.ObjectName ?? "?"));
+                    List<string> used = group.SelectMany(e => refs(e)).Where(n => !n.All(char.IsDigit))
+                        .GroupBy(n => n).OrderByDescending(g => g.Count()).Select(g => g.Key).Take(5).ToList();
+                    sb.AppendLine($"    {group.Count(),4}x {group.Key}  es. {examples}{(used.Count > 0 ? "  usa: " + string.Join(", ", used) : "")}");
+                }
+                if (groups.Count > 60) sb.AppendLine($"    ... e altri {groups.Count - 60} gruppi");
+
+                int shown = 0, total = 0;
+                foreach (igEntity entity in entities)
+                {
+                    List<string> missingNames = missingRefs(entity);
+                    if (missingNames.Count == 0) continue;
+                    total++;
+                    if (shown++ < 30) sb.AppendLine($"    MANCA {string.Join(", ", missingNames)}: {entity.ObjectName ?? "?"} [{entity.GetType().Name}]");
+                }
+                if (total > 30) sb.AppendLine($"    ... e altre {total - 30} entita' che usano file che mancano");
+
+                var otherTypes = igz.Objects.Where(o => o is not igEntity && o is not igComponentData)
+                    .GroupBy(o => o.GetType().Name).OrderByDescending(g => g.Count()).Take(12)
+                    .Select(g => $"{g.Key} {g.Count()}").ToList();
+                if (otherTypes.Count > 0) sb.AppendLine($"    altri oggetti: {string.Join(", ", otherTypes)}");
+            }
+            catch (Exception e)
+            {
+                sb.AppendLine($"{path}: contenuto non leggibile ({e.GetType().Name}: {e.Message})");
+            }
+        }
+
+        /// <summary>
+        /// Rapporto: file che i file convertiti dal PC usano (dipendenze TDEP, che il gioco carica prima del file, e
+        /// riferimenti per nome a oggetti di altri file) e che nell'archivio non ci sono, ma sulla Switch sono solo negli
+        /// archivi di altri livelli: il gioco carica gli archivi comuni (crash1, common...) ma non quelli degli altri
+        /// livelli, quindi non li trova e il caricamento puo' bloccarsi. Quelli che non sono da nessuna parte sono
+        /// nella sezione dei file che il gioco Switch non ha
+        /// </summary>
+        private static void AppendMissingDependencies(StringBuilder report, IgArchive output, List<IgArchiveFile> fromSwitch, ArchiveIndex sw)
+        {
+            static string Normalize(string value)
+            {
+                string p = value.Replace('\\', '/').ToLowerInvariant();
+                int colon = p.IndexOf(':');
+                if (colon >= 0) p = p.Substring(colon + 1);
+                return p.TrimStart('/');
+            }
+            static IEnumerable<string> Names(string path) => NameAliases(NamespaceUtils.GetFileName(path, false).ToLowerInvariant());
+
+            var outputNames = new HashSet<string>(output.Files.SelectMany(f => Names(f.Path)));
+            var originals = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+            var levelArchives = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant()));
+            var archivesByName = new Dictionary<string, SortedSet<string>>();
+            foreach (var (file, archive) in sw.ArchiveOf)
+            {
+                foreach (string name in Names(file.Path))
+                {
+                    if (!archivesByName.TryGetValue(name, out SortedSet<string>? set)) archivesByName[name] = set = new SortedSet<string>();
+                    set.Add(archive);
+                }
+            }
+
+            // nome (file o namespace) -> (tipo di riferimento, file che lo usano)
+            var users = new SortedDictionary<string, (string kind, SortedSet<string> files)>();
+            void Use(string name, string kind, IgArchiveFile user)
+            {
+                if (name.Length == 0 || name.All(char.IsDigit) || name.StartsWith("meta") || outputNames.Contains(name)) return;
+                if (!users.TryGetValue(name, out var entry)) users[name] = entry = (kind, new SortedSet<string>());
+                entry.files.Add(NamespaceUtils.GetFileName(user.Path));
+            }
+            foreach (IgArchiveFile file in output.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!file.IsIGZ() || originals.Contains(lower) || lower.StartsWith("update/")) continue;
+                FixupCollection? fixups = RawFixups(file);
+                if (fixups == null) continue;
+                foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
+                    if (!string.IsNullOrEmpty(item.path)) Use(Names(Normalize(item.path)).First(), "dipendenza", file);
+                foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences))
+                    if (!string.IsNullOrEmpty(reference.namespaceName)) Use(reference.namespaceName.ToLowerInvariant(), "riferimento", file);
+            }
+
+            int common = 0, nowhere = 0;
+            var problems = new List<string>();
+            foreach (var (name, (kind, files)) in users)
+            {
+                SortedSet<string>? archives = archivesByName.GetValueOrDefault(name);
+                if (archives == null || archives.Count == 0) nowhere++;
+                else if (archives.All(levelArchives.Contains))
+                {
+                    string usedBy = string.Join(", ", files.Take(3)) + (files.Count > 3 ? $" e altri {files.Count - 3}" : "");
+                    problems.Add($"  {name} ({kind}): solo in {string.Join(", ", archives.Take(4))}{(archives.Count > 4 ? "..." : "")}; usato da {usedBy}");
+                }
+                else common++;
+            }
+            report.AppendLine("=== FILE USATI DAL LIVELLO CHE SULLA SWITCH SONO SOLO NEGLI ARCHIVI DI ALTRI LIVELLI ===");
+            report.AppendLine($"I file convertiti usano {users.Count} file che non sono nell'archivio: {common} sono negli archivi comuni del");
+            report.AppendLine($"gioco (normale), {nowhere} non sono da nessuna parte (vedi i file che il gioco Switch non ha), {problems.Count} sono solo");
+            report.AppendLine("negli archivi di altri livelli, che il gioco non carica insieme a questo: non li trova.");
+            foreach (string line in problems.Take(80)) report.AppendLine(line);
+            if (problems.Count > 80) report.AppendLine($"  ... e altri {problems.Count - 80}");
+            report.AppendLine();
+        }
 
         /// <summary>
         /// --solo-usati: toglie dall'archivio modelli, materiali e texture (igz in models/, materialinstances/, textures/,

@@ -50,6 +50,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
+        [--solo-usati] [--togli-entita [file:]testo]... [--originale-switch <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro] [--registra-in update|chunkinfos]
         [--gioco crash1|crash2|crash3] [--memoria modello|max|<livello>]
         [--pc-originali <cartella_archives_pc>]
@@ -168,17 +169,37 @@ Dettagli:
   Il convertitore mette nel pacchetto del livello (l'elenco dei file che il gioco carica come
   parte del livello, con tutte le loro entità) solo quelli che c'erano nel pacchetto del PC; gli
   altri restano nell'archivio e il rapporto li elenca come "fuori dal pacchetto". Alcuni livelli
-  (Tropical Escape) hanno nel pacchetto PC anche i file interi di altri livelli: lì serve
-  `--solo-usati`.
-- `--solo-usati` (prova): i file di altri livelli che l'editor copia fanno parte del livello
-  (gli oggetti che prendi restano dentro di loro), quindi restano tutti. Da quei file però
-  toglie le entità che servono solo al livello da cui vengono: il mondo (`CWorldEntity`, che
-  contiene anche la modalità di quel livello, per esempio la moto d'acqua), la partenza, l'intro
-  e il teletrasporto di fine livello. Poi toglie dall'archivio modelli, materiali e texture che
-  nessun file del livello usa. Il rapporto elenca le entità globali trovate (sezione
-  `ENTITA' GLOBALI NEI FILE DI ALTRI LIVELLI`, anche senza l'opzione) e la grafica tolta
-  (`GRAFICA NON USATA`). Fino alla v33 l'opzione toglieva gli oggetti a cui il livello non fa
-  riferimento: sbagliato, perché toglieva anche il pavimento.
+  (Tropical Escape) hanno nel pacchetto PC anche i file interi di altri livelli, che il gioco
+  carica con tutte le loro entità: vedi `--solo-usati`, `--togli-entita` e `--originale-switch`.
+- Contenuto dei file di altri livelli: il rapporto ha la sezione `CONTENUTO DEI FILE DI ALTRI
+  LIVELLI`, con le entità di ognuno raggruppate per tipo e componenti (quante, esempi di nomi, file
+  che usano), quelle che usano file che il gioco Switch non ha (`MANCA ...`), gli altri oggetti e
+  il confronto con l'originale Switch dello stesso file (stesse entità, o quante in più e in
+  meno). La sezione `DIPENDENZE (TDEP) DEI FILE CONVERTITI CHE NON SONO NELL'ARCHIVIO` elenca i
+  file che i file convertiti caricano prima di sé e che sulla Switch sono solo nell'archivio di
+  un altro livello, o in nessuno: il gioco non li trova.
+- `--solo-usati` (prova): i file di altri livelli che l'editor mette nel pacchetto fanno parte
+  del livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello
+  come il pavimento), quindi restano. Da quei file toglie le entità che usano file che il gioco
+  Switch non ha (modelli mancanti; i prefab mancanti non contano, mancano anche nei livelli che
+  funzionano), poi toglie dall'archivio modelli, materiali e texture che nessun file del livello
+  usa più. Il rapporto elenca le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica
+  tolta (`GRAFICA NON USATA`). Fino alla v33 l'opzione toglieva gli oggetti a cui il livello non
+  fa riferimento (sbagliato: toglieva anche il pavimento); nella v34 toglieva mondo, partenza,
+  intro e fine livello, che in quei file non ci sono.
+- `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli le
+  entità che hanno il testo nel nome, nel tipo, nei componenti o nei file che usano. Con
+  `file:` solo dai file con quel testo nel percorso; `*` le toglie tutte. Serve a trovare quali
+  entità bloccano il gioco, guardando la sezione `CONTENUTO DEI FILE DI ALTRI LIVELLI`: per
+  esempio `--togli-entita L318_TellNoTales:*` lascia il file ma senza entità,
+  `--togli-entita L305_MakinWaves:jetski` toglie da Makin' Waves quelle che parlano di jetski.
+  I file del livello stesso non si toccano (quelli si cambiano nell'editor).
+- `--originale-switch <testo>` (prova, si può ripetere): i file di altri livelli con il testo
+  nel percorso si prendono dall'originale Switch invece di convertire la copia del PC, con le
+  loro dipendenze dallo stesso archivio Switch. Se con l'originale il livello si carica e con la
+  copia convertita no, il problema è nella conversione di quel file; se si blocca anche così, è
+  nel contenuto (le entità). Il confronto nel rapporto dice se la copia del PC ha le stesse
+  entità dell'originale.
 - `--altri-livelli`: cosa fare dei file di altri livelli che l'editor copia nell'archivio quando
   usi i loro oggetti (per esempio `maps/Crash3/L309_TombTime/L309_TombTime.igz`):
   - `converti` (predefinito): si convertono le copie PC, come fino alla v12. Provato in gioco;
