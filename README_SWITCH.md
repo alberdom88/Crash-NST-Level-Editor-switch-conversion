@@ -178,15 +178,21 @@ Dettagli:
   meno). La sezione `DIPENDENZE (TDEP) DEI FILE CONVERTITI CHE NON SONO NELL'ARCHIVIO` elenca i
   file che i file convertiti caricano prima di sé e che sulla Switch sono solo nell'archivio di
   un altro livello, o in nessuno: il gioco non li trova.
-- `--solo-usati` (prova): i file di altri livelli che l'editor mette nel pacchetto fanno parte
-  del livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello
-  come il pavimento), quindi restano. Da quei file toglie le entità che usano file che il gioco
-  Switch non ha (modelli mancanti; i prefab mancanti non contano, mancano anche nei livelli che
-  funzionano), poi toglie dall'archivio modelli, materiali e texture che nessun file del livello
-  usa più. Il rapporto elenca le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica
-  tolta (`GRAFICA NON USATA`). Fino alla v33 l'opzione toglieva gli oggetti a cui il livello non
-  fa riferimento (sbagliato: toglieva anche il pavimento); nella v34 toglieva mondo, partenza,
-  intro e fine livello, che in quei file non ci sono.
+- `--solo-usati`: i file di altri livelli che l'editor mette nel pacchetto fanno parte del
+  livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello come
+  il pavimento), quindi restano. Da quei file toglie solo:
+  - le entità che usano modelli che il gioco Switch non ha (sulla Switch non si vedrebbero
+    comunque; i prefab mancanti non contano, mancano anche nei livelli che funzionano);
+  - i nemici dei livelli con la moto d'acqua (`Jetski_Enemy_...`: squalo, assistenti sulla barca
+    e sull'albero con l'ancora, e quello che fanno comparire), se il livello non è con la moto
+    d'acqua: con quelli di Tell No Tales, Tropical Escape resta su LOADING. I cannoni delle barche
+    restano.
+
+  Poi toglie dall'archivio modelli, materiali e texture che nessun file del livello usa più. Il
+  rapporto elenca le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA
+  NON USATA`). Nella v35 l'opzione contava come file mancante anche `metaobject` (i tipi del
+  motore) e toglieva tutti i nemici, i massi e le staccionate dei file di altri livelli: dalla v36
+  restano.
 - `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli le
   entità che hanno il testo nel nome, nel tipo, nei componenti o nei file che usano. Con
   `file:` solo dai file con quel testo nel percorso; `*` le toglie tutte. Serve a trovare quali

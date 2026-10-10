@@ -1782,6 +1782,7 @@ namespace NST
             var removedEntities = new List<string>();
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
+            var modifiedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Nomi dei file che il livello puo' usare: quelli del gioco Switch e quelli dell'archivio PC
             var availableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1794,6 +1795,7 @@ namespace NST
             // Intro di Crash 3 da aggiungere se manca: con --aggiungi-intro, oppure con --gioco crash3 per un livello che
             // nell'editor era di un altro gioco (l'editor la aggiunge quando passi un livello a Crash 3)
             EGameYear? editorYear = PcZoneInfoYear(pc.Files.ToList());
+            bool editorJetski = PcZoneInfoUsesJetski(pc.Files.ToList());
             bool addIntro = !options.WithoutIntro &&
                             (options.AddIntro || (options.Game == "crash3" && editorYear != EGameYear.eGY_2017_Crash3));
             if (options.WithoutIntro && options.AddIntro)
@@ -2035,8 +2037,11 @@ namespace NST
                                 if (!references.TryGetValue(entity, out HashSet<string>? found)) references[entity] = found = EntityReferences(entity, igz);
                                 return found;
                             }
+                            // metaobject, metafield...: tipi del motore, non file (fino alla v35 contavano come file mancanti e
+                            // --solo-usati toglieva tutti i nemici, i massi e le staccionate)
                             List<string> MissingRefs(igEntity entity) =>
-                                Refs(entity).Where(n => !n.All(char.IsDigit) && !availableNames.Contains(n)).OrderBy(n => n).ToList();
+                                Refs(entity).Where(n => !n.All(char.IsDigit) && !n.StartsWith("meta") && !availableNames.Contains(n)).OrderBy(n => n).ToList();
+                            bool modified = false;
 
                             DescribeOtherLevelFile(otherContent, path, igz, original, Refs, MissingRefs);
 
@@ -2052,26 +2057,36 @@ namespace NST
                             {
                                 string names = string.Join(", ", chosen.Take(12).Select(e => e.ObjectName ?? "?")) + (chosen.Count > 12 ? $" e altre {chosen.Count - 12}" : "");
                                 HashSet<igObject> removedObjects = igz.Remove(chosen);
+                                modified = true;
                                 counters["entita' tolte (--togli-entita)"] = counters.GetValueOrDefault("entita' tolte (--togli-entita)") + chosen.Count;
                                 removedEntities.Add($"  --togli-entita, {path}: {chosen.Count} entita' ({removedObjects.Count} oggetti): {names}");
                             }
 
                             if (options.OnlyUsed)
                             {
-                                // I prefab (..._prefab, prefab_...) mancano anche nei livelli che funzionano: non contano
-                                HashSet<igObject> broken = igz.Objects.OfType<igEntity>()
-                                    .Where(e => MissingRefs(e).Any(n => !n.EndsWith("_prefab") && !n.StartsWith("prefab_")))
-                                    .Cast<igObject>().ToHashSet();
+                                // Entita' che usano modelli che la Switch non ha (sulla Switch non si vedrebbero comunque). I prefab
+                                // (..._prefab, prefab_...) mancano anche nei livelli che funzionano: non contano
+                                var broken = new Dictionary<igObject, string>();
+                                foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
+                                {
+                                    List<string> missingFiles = MissingRefs(candidate).Where(n => !n.EndsWith("_prefab") && !n.StartsWith("prefab_")).ToList();
+                                    if (missingFiles.Count > 0) broken[candidate] = "manca " + string.Join(", ", missingFiles);
+                                    // Nemici dei livelli con la moto d'acqua (personaggi e quello che fanno comparire) in un livello
+                                    // senza moto d'acqua: con quelli di Tell No Tales Tropical Escape resta su LOADING
+                                    else if (!editorJetski && IsJetskiEnemy(candidate, Refs(candidate))) broken[candidate] = "nemico della moto d'acqua";
+                                }
                                 if (broken.Count > 0)
                                 {
-                                    string names = string.Join(", ", broken.Take(12).Select(e => $"{e.ObjectName ?? "?"} ({string.Join(", ", MissingRefs((igEntity)e))})")) +
+                                    string names = string.Join(", ", broken.Take(12).Select(b => $"{b.Key.ObjectName ?? "?"} ({b.Value})")) +
                                                    (broken.Count > 12 ? $" e altre {broken.Count - 12}" : "");
-                                    HashSet<igObject> removedObjects = igz.Remove(broken);
-                                    counters["entita' tolte perche' usano file che la Switch non ha (--solo-usati)"] =
-                                        counters.GetValueOrDefault("entita' tolte perche' usano file che la Switch non ha (--solo-usati)") + broken.Count;
+                                    HashSet<igObject> removedObjects = igz.Remove(broken.Keys.ToHashSet());
+                                    modified = true;
+                                    counters["entita' tolte dai file di altri livelli (--solo-usati)"] =
+                                        counters.GetValueOrDefault("entita' tolte dai file di altri livelli (--solo-usati)") + broken.Count;
                                     removedEntities.Add($"  --solo-usati, {path}: {broken.Count} entita' ({removedObjects.Count} oggetti): {names}");
                                 }
                             }
+                            if (modified) modifiedOtherFiles.Add(target);
                         }
 
                         igz.GameVersion = GameVersion.NSX;
@@ -2142,6 +2157,19 @@ namespace NST
                         IgArchiveFile converted = new IgArchiveFile(target, GameVersion.NSX);
                         converted.SetData(igz.Save(newNamespace));
                         output.AddFile(converted);
+
+                        // File da cui sono state tolte entita': si controlla che si rilegga
+                        if (modifiedOtherFiles.Contains(target))
+                        {
+                            try
+                            {
+                                converted.ToIgzFile();
+                            }
+                            catch (Exception readError)
+                            {
+                                removedEntities.Add($"  ATTENZIONE: {target} dopo aver tolto le entita' non si rilegge ({readError.Message})");
+                            }
+                        }
                         included.Add(target.ToLowerInvariant());
 
                         Increment(counters, unmodified == false ? "igz modificati convertiti" : "igz convertiti");
@@ -2938,6 +2966,15 @@ namespace NST
         }
 
         /// <summary>
+        /// Nemico dei livelli con la moto d'acqua (Tell No Tales, Makin' Waves...): personaggio (o oggetto che fa comparire)
+        /// con un comportamento (riferimenti ai tipi del motore, metaobject) e "jetski_enemy" nel nome. I cannoni delle
+        /// barche (Jetski_Hazard_Cannon) non lo sono: in Tropical Escape non bloccano il gioco
+        /// </summary>
+        private static bool IsJetskiEnemy(igEntity entity, HashSet<string> references) =>
+            (entity.ObjectName ?? "").Contains("jetski_enemy", StringComparison.OrdinalIgnoreCase) &&
+            references.Any(r => r.StartsWith("meta"));
+
+        /// <summary>
         /// --togli-entita "[file:]testo": il file (testo nel percorso) e il testo nel nome dell'entita', nel tipo, nei
         /// componenti o nei file che usa. Testo vuoto o * = tutte le entita' del file
         /// </summary>
@@ -3131,6 +3168,7 @@ namespace NST
 
             // Il pacchetto elenca tutti i file: non conta come uso (si ricostruisce dopo con i file rimasti)
             var deps = new Dictionary<IgArchiveFile, HashSet<string>>();
+            var unreadable = new List<string>();
             foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase)))
             {
                 try
@@ -3139,9 +3177,18 @@ namespace NST
                 }
                 catch (Exception e)
                 {
-                    report.AppendLine($"--solo-usati: {file.Path} non leggibile ({e.Message}): non tolgo nessun file");
-                    report.AppendLine();
-                    return;
+                    // Un file che l'editor non rilegge: i file che usa si leggono dai fixup (dipendenze e riferimenti per nome)
+                    try
+                    {
+                        deps[file] = RawDependencies(file.Uncompress());
+                        unreadable.Add($"  {file.Path} ({e.Message})");
+                    }
+                    catch (Exception rawError)
+                    {
+                        report.AppendLine($"--solo-usati: {file.Path} non leggibile ({e.Message}; {rawError.Message}): non tolgo nessun file");
+                        report.AppendLine();
+                        return;
+                    }
                 }
             }
 
@@ -3162,6 +3209,11 @@ namespace NST
             foreach (IgArchiveFile file in unused) output.RemoveFile(file);
             report.AppendLine("=== GRAFICA NON USATA (--solo-usati) ===");
             report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) di modelli, materiali e texture che nessun file del livello usa");
+            if (unreadable.Count > 0)
+            {
+                report.AppendLine($"file che l'editor non rilegge (i file che usano letti dai riferimenti): {unreadable.Count}");
+                foreach (string line in unreadable.Take(10)) report.AppendLine(line);
+            }
             foreach (IgArchiveFile file in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
                 report.AppendLine($"  {Mb((ulong)file.UncompressedSize),10}  {file.Path}");
             if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20}");
@@ -3299,6 +3351,28 @@ namespace NST
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Il livello nell'editor e' con la moto d'acqua (opzione {jetski} o veicolo moto d'acqua nella zone info del PC)
+        /// </summary>
+        private static bool PcZoneInfoUsesJetski(List<IgArchiveFile> files)
+        {
+            foreach (IgArchiveFile file in files)
+            {
+                if (!file.Path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    if (file.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo zone)
+                        return GameplayModeManager.GetSpecialZoneInfoOptions(zone._build).Contains("jetski") ||
+                               (zone._zoneVehicle ?? "").Contains("jetski", StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    // zone info non leggibile: senza moto d'acqua
+                }
+            }
+            return false;
         }
 
         private static string DescribeZoneInfo(CZoneInfo zone)
