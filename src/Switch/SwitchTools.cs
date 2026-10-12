@@ -83,6 +83,8 @@ namespace NST
             public string RegisterIn = "update";
             // --nuovo: gioco del livello ("crash1", "crash2", "crash3") al posto di quello scelto nell'editor (Crash Mode)
             public string? Game;
+            // --nuovo senza --gioco: Game e' il gioco impostato nell'editor (Crash Mode), diverso dalla cartella del livello
+            public bool GameFromEditor;
             // --nuovo: memoria del livello nella zone info: "modello" (quella del livello originale da cui viene la
             // zone info), "max" (la piu' grande tra i livelli originali) o il nome di un livello originale
             public string Memory = "modello";
@@ -1499,6 +1501,11 @@ namespace NST
             public string ToName = "";
             public string? FromDir;
             public string? ToDir;
+            // Cartelle dello stesso livello in un altro gioco (Crash2/Custom_Level accanto a Crash1/Custom_Level): l'editor
+            // ci lascia una parte dei file quando si cambia il Crash Mode. Vanno anche loro in ToDir
+            public List<string> ExtraFromDirs = [];
+            // File di quelle cartelle che restano dove sono (stesso nome di un file della cartella del livello)
+            public HashSet<string> KeepFolder = new(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>
             /// Cartella e nome cambiano solo nei percorsi dei file dei livelli (maps/, models/maps/, packages/generated/maps/,
@@ -1512,13 +1519,19 @@ namespace NST
                 string[] parts = path.Split('/');
                 int start = LevelFolderStart(parts, 0);
                 if (start < 0) return path;
-                if (FromDir != null && ToDir != null && !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase))
+                if (FromDir != null && ToDir != null)
                 {
-                    string[] from = FromDir.Split('/');
                     string[] to = ToDir.Split('/');
-                    if (from.Length == 2 && to.Length == 2 && start + 2 < parts.Length &&
-                        parts[start].Equals(from[0], StringComparison.OrdinalIgnoreCase) &&
-                        parts[start + 1].Equals(from[1], StringComparison.OrdinalIgnoreCase))
+                    bool Matches(string dir)
+                    {
+                        string[] from = dir.Split('/');
+                        return from.Length == 2 && start + 2 < parts.Length &&
+                               parts[start].Equals(from[0], StringComparison.OrdinalIgnoreCase) &&
+                               parts[start + 1].Equals(from[1], StringComparison.OrdinalIgnoreCase);
+                    }
+                    bool primary = !FromDir.Equals(ToDir, StringComparison.OrdinalIgnoreCase) && Matches(FromDir);
+                    bool extra = !primary && !KeepFolder.Contains(path) && ExtraFromDirs.Any(Matches);
+                    if (to.Length == 2 && (primary || extra))
                     {
                         parts[start] = to[0];
                         parts[start + 1] = to[1];
@@ -1526,6 +1539,16 @@ namespace NST
                 }
                 parts[parts.Length - 1] = ReplaceNameToken(parts[parts.Length - 1], FromName, ToName);
                 return string.Join("/", parts);
+            }
+
+            /// <summary>
+            /// Cartella del livello ("Crash1/Custom_Level") di un percorso di un file dei livelli, null per gli altri percorsi
+            /// </summary>
+            public static string? DirOf(string path)
+            {
+                string[] parts = path.Split('/');
+                int start = LevelFolderStart(parts, 0);
+                return start >= 0 && start + 2 < parts.Length ? parts[start] + "/" + parts[start + 1] : null;
             }
 
             public override string ToString()
@@ -1783,6 +1806,9 @@ namespace NST
 
             LevelRename? rename = null;
             string? baseArchive = null;
+            // File del livello in una sua seconda cartella che hanno lo stesso nome di uno della cartella del livello e
+            // nessuna entita' (file principale vuoto lasciato dall'editor): fuori dall'archivio
+            var duplicateLevelFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             if (options.NewLevel && (options.ReplaceLevel != null || options.RenameBack))
             {
@@ -1836,6 +1862,26 @@ namespace NST
                     return 1;
                 }
 
+                // Il gioco del livello e' quello impostato nell'editor (Crash Mode, l'anno della sua zone info). Se il livello
+                // e' nella cartella di un altro gioco (Crash Mode cambiato dopo averlo creato) passa nella cartella di quel
+                // gioco, come con --gioco: cartella e zone info di giochi diversi (fino alla v37 la zone info del Crash Mode
+                // in un livello lasciato nella sua cartella) e Level 10 e 11 restavano su LOADING; con la zone info di Road
+                // to Nowhere passata a Crash 3 nella cartella di Crash 1 il gioco si fermava sul titolo (v26)
+                if (options.Game == null && options.ZoneInfoFrom == null)
+                {
+                    List<IgArchiveFile> pcUpdate = pc.Files.Where(f => f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
+                    string? editorGame = GameOfYear(PcZoneInfoYear(pcUpdate.Count > 0 ? pcUpdate : pc.Files.ToList()));
+                    string folderGame = newPackage.Value.dir.Split('/')[0].ToLowerInvariant();
+                    if (editorGame != null && editorGame != folderGame)
+                    {
+                        options.Game = editorGame;
+                        options.GameFromEditor = true;
+                        report.AppendLine($"--nuovo: nell'editor il livello e' impostato come {editorGame} (Crash Mode) ma e' nella cartella " +
+                                          $"{newPackage.Value.dir.Split('/')[0]}: passa nella cartella {GameFolder(editorGame)}, perche' cartella e zone " +
+                                          $"info devono essere dello stesso gioco (con --gioco {folderGame} resta dov'e', con le regole di {folderGame})");
+                    }
+                }
+
                 if (!requested.Equals(pcName, StringComparison.OrdinalIgnoreCase))
                 {
                     if (switchLevels.Any(l => l.Equals(pcName, StringComparison.OrdinalIgnoreCase)))
@@ -1855,11 +1901,66 @@ namespace NST
                 else if (GameFolder(options.Game) is string gameFolder &&
                          !newPackage.Value.dir.Split('/')[0].Equals(gameFolder, StringComparison.OrdinalIgnoreCase))
                 {
-                    // --gioco: stesso nome, cartella del gioco scelto
+                    // --gioco (o gioco dell'editor): stesso nome, cartella del gioco scelto
                     string toDir = gameFolder + "/" + newPackage.Value.dir.Split('/')[1];
                     rename = new LevelRename { FromName = pcName, ToName = pcName, FromDir = newPackage.Value.dir, ToDir = toDir };
                     newPackage = (toDir, pcName);
-                    report.AppendLine($"--gioco: il livello passa nella cartella del gioco scelto: {rename}");
+                    report.AppendLine($"{(options.GameFromEditor ? "gioco dell'editor" : "--gioco")}: il livello passa nella cartella del gioco: {rename}");
+                }
+
+                // Parte dei file del livello nella cartella di un altro gioco (Crash2/Custom_Level accanto a Crash1/Custom_Level,
+                // lasciati dall'editor quando si cambia il Crash Mode): finiscono anche loro nella cartella del livello. Un file
+                // con lo stesso nome di uno della cartella del livello resta dov'e' (se e' senza entita', come il file principale
+                // vuoto lasciato dall'editor, si toglie: con lo stesso nome del file principale ne prenderebbe il posto)
+                if (rename != null && rename.FromDir != null && rename.ToDir != null)
+                {
+                    LevelRename levelRename = rename;
+                    string fromDir = rename.FromDir;
+                    string fromFolder = fromDir.Split('/')[1];
+                    List<string> extra = pc.Files.Select(f => LevelRename.DirOf(f.Path)).OfType<string>()
+                        .Where(d => !d.Equals(fromDir, StringComparison.OrdinalIgnoreCase) &&
+                                    d.Split('/')[1].Equals(fromFolder, StringComparison.OrdinalIgnoreCase) &&
+                                    NormalizeGame(d.Split('/')[0]) != "")
+                        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    if (extra.Count > 0)
+                    {
+                        // destinazioni dei file della cartella del livello (prima di aggiungere le altre cartelle)
+                        var primaryTargets = new HashSet<string>(
+                            pc.Files.Where(f => fromDir.Equals(LevelRename.DirOf(f.Path), StringComparison.OrdinalIgnoreCase))
+                                    .Select(f => levelRename.Apply(f.Path)), StringComparer.OrdinalIgnoreCase);
+                        levelRename.ExtraFromDirs = extra;
+                        int moved = 0;
+                        foreach (IgArchiveFile levelFile in pc.Files.Where(p => extra.Any(d => d.Equals(LevelRename.DirOf(p.Path), StringComparison.OrdinalIgnoreCase))))
+                        {
+                            if (!primaryTargets.Contains(levelRename.Apply(levelFile.Path)))
+                            {
+                                moved++;
+                                continue;
+                            }
+                            levelRename.KeepFolder.Add(levelFile.Path);
+                            int entities = -1;
+                            try
+                            {
+                                if (levelFile.IsIGZ()) entities = levelFile.ToIgzFile().Objects.OfType<igEntity>().Count();
+                            }
+                            catch
+                            {
+                                // non leggibile: resta
+                            }
+                            if (entities == 0)
+                            {
+                                duplicateLevelFiles.Add(levelFile.Path);
+                                report.AppendLine($"--nuovo: {levelFile.Path} (senza entita') ha lo stesso nome di un file del livello: tolto");
+                            }
+                            else
+                            {
+                                report.AppendLine($"--nuovo: ATTENZIONE: {levelFile.Path} ha lo stesso nome di un file del livello: resta nella sua cartella " +
+                                                  "(i due file hanno lo stesso nome interno, il gioco potrebbe usarne uno solo)");
+                            }
+                        }
+                        report.AppendLine($"--nuovo: file del livello anche in {string.Join(", ", extra)} (lasciati dall'editor cambiando il " +
+                                          $"Crash Mode): {moved} spostati in {levelRename.ToDir}");
+                    }
                 }
 
                 // Sulla Switch gli archivi dei livelli sono in minuscolo (l112_roadtonowhere.pak) e il gioco
@@ -1921,6 +2022,9 @@ namespace NST
             report.AppendLine();
 
             // Namespaces renamed with the level (package and collision files)
+            // Cartelle del livello, comprese quelle in un altro gioco (vedi ExtraFromDirs): i loro file non sono di altri livelli
+            List<string> levelDirsAll = rename != null ? levelDirs.Concat(rename.ExtraFromDirs).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : levelDirs;
+
             var renamedNamespaces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (rename != null)
             {
@@ -1987,6 +2091,7 @@ namespace NST
             // File di altri livelli copiati dall'editor: contenuto (per il rapporto) ed entita' tolte
             var otherContent = new StringBuilder();
             var removedEntities = new List<string>();
+            var unreadableFiles = new List<string>();  // file convertiti che non si rileggono
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
             var modifiedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2007,6 +2112,7 @@ namespace NST
             {
                 string pcLower = pcFile.Path.ToLowerInvariant();
                 if (options.Exclude.Any(x => pcFile.Path.Contains(x, StringComparison.OrdinalIgnoreCase))) continue;
+                if (ctr == null && IsCtrAsset(pcFile.Path)) continue;
                 bool pcGraphics = (pcLower.StartsWith("models/") && !pcLower.StartsWith("models/maps/")) || pcLower.StartsWith("textures/") ||
                                   pcLower.StartsWith("materialinstances/") || pcLower.StartsWith("loosetextures/");
                 if (pcGraphics && ctr == null && !index.ContainsKey(pcLower)) continue;
@@ -2021,14 +2127,17 @@ namespace NST
             bool levelHasC3Intro = !options.WithoutIntro && pc.Files.Any(f =>
                 f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) &&
                 !options.Exclude.Any(x => f.Path.Contains(x, StringComparison.OrdinalIgnoreCase)) &&
-                (!IsOtherLevelMapFile(f.Path, levelDirs) || InPcPackage(f.Path)) &&
+                (!IsOtherLevelMapFile(f.Path, levelDirsAll) || InPcPackage(f.Path)) &&
                 HasC3Intro(f));
             int done = 0;
 
             // Intro di Crash 3 da aggiungere se manca: con --aggiungi-intro, oppure con --gioco crash3 per un livello che
             // nell'editor era di un altro gioco (l'editor la aggiunge quando passi un livello a Crash 3)
-            EGameYear? editorYear = PcZoneInfoYear(pc.Files.ToList());
-            bool editorJetski = PcZoneInfoUsesJetski(pc.Files.ToList());
+            // zone info dell'editor: quella della registrazione (update/), non quelle di altri livelli copiate nell'archivio
+            List<IgArchiveFile> pcZoneFiles = pc.Files.Where(f => f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (pcZoneFiles.Count == 0) pcZoneFiles = pc.Files.ToList();
+            EGameYear? editorYear = PcZoneInfoYear(pcZoneFiles);
+            bool editorJetski = PcZoneInfoUsesJetski(pcZoneFiles);
             bool addIntro = !options.WithoutIntro &&
                             (options.AddIntro || (options.Game == "crash3" && editorYear != EGameYear.eGY_2017_Crash3));
             if (options.WithoutIntro && options.AddIntro)
@@ -2104,6 +2213,23 @@ namespace NST
                         continue;
                     }
 
+                    // Asset di Crash Team Racing (Octane) importati nell'editor: la Switch non li ha e la loro grafica non si
+                    // converte, quindi i loro oggetti resterebbero senza modello. Senza --ctr restano fuori (come --escludi Octane)
+                    if (ctr == null && !path.StartsWith("update/", StringComparison.OrdinalIgnoreCase) && IsCtrAsset(path))
+                    {
+                        Increment(counters, "asset di Crash Team Racing esclusi (senza --ctr)");
+                        lines.Add($"escluso (Crash Team Racing): {path}");
+                        continue;
+                    }
+
+                    // File vuoto del livello rimasto in una sua seconda cartella con lo stesso nome di uno della cartella del livello
+                    if (duplicateLevelFiles.Contains(path))
+                    {
+                        Increment(counters, "file vuoti del livello lasciati dall'editor in un'altra cartella (tolti)");
+                        lines.Add($"tolto (file vuoto lasciato dall'editor): {path}");
+                        continue;
+                    }
+
                     // Livello nuovo: la zone info e gli altri file update/ vanno in update.pak
                     if (options.NewLevel && path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
                     {
@@ -2123,7 +2249,7 @@ namespace NST
                     string target = rename != null ? rename.Apply(path) : path;
                     if (included.Contains(target.ToLowerInvariant())) continue;
 
-                    bool otherLevelFile = IsOtherLevelMapFile(path, levelDirs);
+                    bool otherLevelFile = IsOtherLevelMapFile(path, levelDirsAll);
                     if (otherLevelFile) otherLevelTargets.Add(target);
 
                     index.TryGetValue(target.ToLowerInvariant(), out IgArchiveFile? original);
@@ -2134,7 +2260,7 @@ namespace NST
                         unmodified = SameData(file, pcOriginal);
                     }
 
-                    bool levelContent = otherLevelsFromSwitch ? IsLevelContent(path, levels, levelDirs) : IsLevelContentAll(path, levels);
+                    bool levelContent = otherLevelsFromSwitch ? IsLevelContent(path, levels, levelDirsAll) : IsLevelContentAll(path, levels);
                     bool collision = target.Contains("staticcollision", StringComparison.OrdinalIgnoreCase);
 
                     // --originale-switch: file di un altro livello preso dall'originale Switch (le sue dipendenze si
@@ -2364,21 +2490,23 @@ namespace NST
                             }
                         }
 
-                        if (rename != null)
+                        // Cartella e nome del livello nei riferimenti, nella collisione e nel pacchetto
+                        int RenameLevel(IgzFile x)
                         {
-                            int renamedCount = RenameNamespaces(igz, renamedNamespaces);
-                            renamedCount += RenameCollisionKeys(igz, renamedNamespaces);
+                            if (rename == null) return 0;
+                            int count = RenameNamespaces(x, renamedNamespaces);
+                            count += RenameCollisionKeys(x, renamedNamespaces);
 
                             // Name of the static collision, stored as text in its name list
                             if (collision)
                             {
-                                foreach (igNameList list in igz.Objects.OfType<igNameList>())
+                                foreach (igNameList list in x.Objects.OfType<igNameList>())
                                 {
                                     foreach (igNameMetaField entry in list._data)
                                     {
                                         if (entry._name == null || !entry._name.Contains(rename.FromName, StringComparison.OrdinalIgnoreCase)) continue;
                                         entry._name = ReplaceIgnoreCase(entry._name, rename.FromName, rename.ToName);
-                                        renamedCount++;
+                                        count++;
                                     }
                                 }
                             }
@@ -2386,7 +2514,7 @@ namespace NST
                             // Files listed by the package (keeping their type)
                             if (PackageInfo(target) != null)
                             {
-                                foreach (igStreamingChunkInfo info in igz.Objects.OfType<igStreamingChunkInfo>())
+                                foreach (igStreamingChunkInfo info in x.Objects.OfType<igStreamingChunkInfo>())
                                 {
                                     foreach (ChunkFileInfoMetaField entry in info._required._data)
                                     {
@@ -2394,30 +2522,58 @@ namespace NST
                                         string renamedName = rename.Apply(entry._name);
                                         if (renamedName == entry._name) continue;
                                         entry._name = renamedName.ToLowerInvariant();
-                                        renamedCount++;
+                                        count++;
                                     }
                                 }
                             }
-
-                            if (renamedCount > 0) lines.Add($"riferimenti al livello rinominati: {renamedCount} in {target}");
+                            return count;
                         }
+
+                        int renamedCount = RenameLevel(igz);
+                        if (renamedCount > 0) lines.Add($"riferimenti al livello rinominati: {renamedCount} in {target}");
 
                         IgArchiveFile converted = new IgArchiveFile(target, GameVersion.NSX);
                         converted.SetData(igz.Save(newNamespace));
-                        output.AddFile(converted);
+                        string? readError = RereadError(converted);
 
-                        // File da cui sono state tolte entita': si controlla che si rilegga
+                        // File di altri livelli da cui sono state tolte entita'
                         if (modifiedOtherFiles.Contains(target))
                         {
-                            try
+                            // Non resta nessuna entita' (per esempio tutte decorazioni con modelli che la Switch non ha): il file resta
+                            // fuori dall'archivio e dal pacchetto. Scritto con la lista vuota non si rileggeva (L304_BoneYard_Art in
+                            // Level 11, che restava su LOADING)
+                            if (!igz.Objects.OfType<igEntity>().Any() &&
+                                igz.Objects.All(o => o.GetType().Name is "igObjectList" or "igEntityList" or "igNameList"))
                             {
-                                converted.ToIgzFile();
+                                Increment(counters, "file di altri livelli tolti (nessuna entita' rimasta)");
+                                removedEntities.Add($"  {target}: non resta nessuna entita', il file resta fuori dall'archivio e dal pacchetto");
+                                included.Add(target.ToLowerInvariant());
+                                continue;
                             }
-                            catch (Exception readError)
+                            // Non si rilegge: meglio il file com'era, senza togliere entita', che un file rovinato
+                            if (readError != null)
                             {
-                                removedEntities.Add($"  ATTENZIONE: {target} dopo aver tolto le entita' non si rilegge ({readError.Message})");
+                                IgzFile fresh = file.ToIgzFile();
+                                if (options.WithoutIntro)
+                                {
+                                    HashSet<igObject> freshIntros = fresh.Objects.OfType<igEntity>()
+                                        .Where(e => e.GetComponent<common_C3_IntroSequenceData>() != null)
+                                        .Cast<igObject>()
+                                        .ToHashSet();
+                                    if (freshIntros.Count > 0) fresh.Remove(freshIntros);
+                                }
+                                fresh.GameVersion = GameVersion.NSX;
+                                RenameLevel(fresh);
+                                converted.SetData(fresh.Save(newNamespace));
+                                string? again = RereadError(converted);
+                                removedEntities.Add($"  ATTENZIONE: {target} dopo aver tolto le entita' non si rileggeva ({readError}): tenuto com'era, " +
+                                                    "senza toglierle" + (again != null ? $" (ma non si rilegge neanche cosi': {again})" : ""));
+                                Increment(counters, "file di altri livelli tenuti senza togliere entita' (non si rileggevano)");
+                                readError = again;
                             }
                         }
+                        if (readError != null) unreadableFiles.Add($"  {target}: {readError}");
+                        output.AddFile(converted);
                         included.Add(target.ToLowerInvariant());
 
                         Increment(counters, unmodified == false ? "igz modificati convertiti" : "igz convertiti");
@@ -2449,6 +2605,63 @@ namespace NST
                     string lower = file.Path.ToLowerInvariant();
                     if (lower.StartsWith("maps/") || lower.StartsWith("packages/") || lower.StartsWith("update/") || lower.StartsWith("models/maps/")) continue;
                     AddOriginal(file, "file del livello originale Switch aggiunti");
+                }
+            }
+
+            // Riferimenti a file che sulla Switch stanno solo negli archivi di altri livelli (banchi dei suoni, script...): il
+            // gioco carica l'archivio del livello e quelli comuni, non quelli degli altri livelli, quindi non li troverebbe.
+            // Si copiano dall'archivio di un livello che li ha (le loro dipendenze si aggiungono sotto, dallo stesso archivio).
+            // Non i file in maps/ (pezzi di altri livelli: telecamere, nemici...), che restano nel rapporto
+            var copiedFromLevels = new List<string>();
+            {
+                // archivi dei livelli: quelli con un pacchetto in packages/generated/maps e quelli con il nome di un livello o di
+                // un boss (Lxxx_..., Bxxx_...: i pacchetti dei boss stanno una cartella piu' in basso)
+                var levelArchives = LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
+                    .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_'))
+                    .Distinct().OrderBy(a => a, StringComparer.Ordinal).ToList();
+                var levelArchiveSet = new HashSet<string>(levelArchives);
+                var outputNames = new HashSet<string>(output.Files.SelectMany(f => NameAliases(NamespaceUtils.GetFileName(f.Path, false).ToLowerInvariant())));
+                var commonNames = new HashSet<string>();
+                foreach (var (archiveName, archiveFiles) in sw.ByArchive)
+                {
+                    if (levelArchiveSet.Contains(archiveName)) continue;
+                    foreach (IgArchiveFile archiveFile in archiveFiles)
+                        foreach (string alias in NameAliases(NamespaceUtils.GetFileName(archiveFile.Path, false).ToLowerInvariant()))
+                            commonNames.Add(alias);
+                }
+                var originalPaths = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+                var users = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+                foreach (IgArchiveFile converted in output.Files.ToList())
+                {
+                    string lower = converted.Path.ToLowerInvariant();
+                    if (!converted.IsIGZ() || originalPaths.Contains(lower) || lower.StartsWith("update/")) continue;
+                    FixupCollection? fixups = RawFixups(converted);
+                    if (fixups == null) continue;
+                    var names = new List<string>();
+                    foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
+                        if (!string.IsNullOrEmpty(item.path))
+                            names.Add(NameAliases(NamespaceUtils.GetFileName(NormalizeFixupPath(item.path), false).ToLowerInvariant()).First());
+                    foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+                        if (!string.IsNullOrEmpty(reference.namespaceName)) names.Add(reference.namespaceName.ToLowerInvariant());
+                    foreach (string name in names)
+                    {
+                        if (name.Length == 0 || name.All(char.IsDigit) || name.StartsWith("meta") || outputNames.Contains(name) || commonNames.Contains(name)) continue;
+                        if (!users.TryGetValue(name, out SortedSet<string>? usedBy)) users[name] = usedBy = new SortedSet<string>(StringComparer.Ordinal);
+                        usedBy.Add(NamespaceUtils.GetFileName(converted.Path));
+                    }
+                }
+                foreach (var (name, usedBy) in users)
+                {
+                    string? archive = levelArchives.FirstOrDefault(a => sw.Names(a).ContainsKey(name));
+                    if (archive == null) continue;
+                    string who = string.Join(", ", usedBy.Take(3)) + (usedBy.Count > 3 ? $" e altri {usedBy.Count - 3}" : "");
+                    foreach (IgArchiveFile dependency in sw.Names(archive)[name])
+                    {
+                        if (included.Contains(dependency.Path.ToLowerInvariant())) continue;
+                        AddOriginal(dependency, "file presi da archivi di altri livelli (riferimenti)");
+                        lines.Add($"preso da {archive}.pak (usato da {who}): {dependency.Path}");
+                        copiedFromLevels.Add($"  {dependency.Path} da {archive}.pak (usato da {who})");
+                    }
                 }
             }
 
@@ -2619,13 +2832,15 @@ namespace NST
                         string baseGame = baseParts.Length > 1 ? baseParts[1].ToLowerInvariant() : "";
                         if (baseGame != options.Game)
                         {
-                            report.AppendLine($"--gioco {options.Game}: {baseTemplate} e' di {baseGame}, zone info presa da {gameDefault}");
+                            report.AppendLine($"{(options.GameFromEditor ? "gioco dell'editor" : "--gioco")} {options.Game}: {baseTemplate} e' di {baseGame}, zone info presa da {gameDefault}");
                             baseTemplate = null;
                         }
                     }
                     zoneTemplate = baseTemplate ?? gameDefault;
                     report.AppendLine($"--nuovo: zone info presa da {zoneTemplate} (scelta automatica; per cambiarla --zoneinfo-da <livello>)");
-                    if (options.Game != null) report.AppendLine($"  gioco scelto con --gioco: {options.Game}, cartella del livello: {game}");
+                    if (options.Game != null && options.GameFromEditor)
+                        report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {options.Game}, cartella del livello: {game} (spostata in quella del gioco)");
+                    else if (options.Game != null) report.AppendLine($"  gioco scelto con --gioco: {options.Game}, cartella del livello: {game}");
                     else if (pcYear != null) report.AppendLine($"  gioco impostato nell'editor (Crash Mode): {yearGame}, cartella del livello: {game}");
                     if (yearGame != game && zoneTemplate == gameDefault)
                         report.AppendLine($"  il livello e' nella cartella {game} ma nell'editor e' impostato come {yearGame}: zone info di {yearGame}");
@@ -2741,6 +2956,25 @@ namespace NST
                 report.AppendLine("=== FILE DI ALTRI LIVELLI CAMBIATI ===");
                 foreach (string line in switchOriginalUsed) report.AppendLine(line);
                 foreach (string line in removedEntities) report.AppendLine(line);
+                report.AppendLine();
+            }
+
+            if (copiedFromLevels.Count > 0)
+            {
+                report.AppendLine($"=== FILE PRESI DAGLI ARCHIVI DI ALTRI LIVELLI ({copiedFromLevels.Count}) ===");
+                report.AppendLine("Il livello li usa e sulla Switch stanno solo negli archivi di altri livelli, che il gioco non carica");
+                report.AppendLine("con questo: sono stati copiati nell'archivio del livello, con le loro dipendenze.");
+                foreach (string line in copiedFromLevels.Take(80)) report.AppendLine(line);
+                if (copiedFromLevels.Count > 80) report.AppendLine($"  ... e altri {copiedFromLevels.Count - 80}");
+                report.AppendLine();
+            }
+            if (unreadableFiles.Count > 0)
+            {
+                report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
+                report.AppendLine("Scritti nell'archivio, ma il convertitore non riesce a rileggerli: se il livello si blocca, sono i");
+                report.AppendLine("primi sospetti (si possono lasciare fuori con --escludi <testo del percorso>).");
+                foreach (string line in unreadableFiles.Take(80)) report.AppendLine(line);
+                if (unreadableFiles.Count > 80) report.AppendLine($"  ... e altri {unreadableFiles.Count - 80}");
                 report.AppendLine();
             }
 
@@ -3582,9 +3816,55 @@ namespace NST
         }
 
         /// <summary>
+        /// Percorso di una dipendenza TDEP senza il prefisso del dispositivo ("cartella:/...") e la barra iniziale, in minuscolo
+        /// </summary>
+        private static string NormalizeFixupPath(string value)
+        {
+            string p = value.Replace('\\', '/').ToLowerInvariant();
+            int colon = p.IndexOf(':');
+            if (colon >= 0) p = p.Substring(colon + 1);
+            return p.TrimStart('/');
+        }
+
+        /// <summary>
+        /// Errore nel rileggere un igz appena scritto, null se si rilegge
+        /// </summary>
+        private static string? RereadError(IgArchiveFile file)
+        {
+            try
+            {
+                file.ToIgzFile();
+                return null;
+            }
+            catch (Exception e)
+            {
+                return $"{e.GetType().Name}: {e.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Asset di Crash Team Racing (Octane) importato nell'editor: una cartella Octane nel percorso (maps/Octane/...,
+        /// models/Levels/Octane/..., materialinstances/Octane/...) o nel nome di una texture (...!Octane!...)
+        /// </summary>
+        private static bool IsCtrAsset(string path) =>
+            path.Split('/').Any(p => p.Equals("Octane", StringComparison.OrdinalIgnoreCase)) ||
+            path.Contains("!octane!", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Cartella del gioco scelto con --gioco ("crash3" -> "Crash3"), null senza --gioco
         /// </summary>
         private static string? GameFolder(string? game) => string.IsNullOrEmpty(game) ? null : "Crash" + game.Substring(5);
+
+        /// <summary>
+        /// Gioco ("crash1", "crash2", "crash3") di un anno della zone info, null se non e' uno dei tre
+        /// </summary>
+        private static string? GameOfYear(EGameYear? year) => year switch
+        {
+            EGameYear.eGY_2017_Crash1 => "crash1",
+            EGameYear.eGY_2017_Crash2 => "crash2",
+            EGameYear.eGY_2017_Crash3 => "crash3",
+            _ => null
+        };
 
         /// <summary>
         /// File principale del livello: quello con il nome del livello, oppure, per un livello creato da uno originale
@@ -3593,7 +3873,12 @@ namespace NST
         private static bool IsMainLevelFile(string path, List<string> levels, List<string> levelDirs)
         {
             string name = NamespaceUtils.GetFileName(path, false);
-            if (levels.Any(l => name.Equals(l, StringComparison.OrdinalIgnoreCase))) return true;
+            // nella cartella del livello: un file con lo stesso nome in un'altra cartella (Crash2/Custom_Level/Custom_Level.igz
+            // lasciato dall'editor) non e' il file principale
+            string[] parts = path.Split('/');
+            bool inLevelDir = levelDirs.Count == 0 ||
+                              (parts.Length == 4 && levelDirs.Any(d => d.Equals(parts[1] + "/" + parts[2], StringComparison.OrdinalIgnoreCase)));
+            if (inLevelDir && levels.Any(l => name.Equals(l, StringComparison.OrdinalIgnoreCase))) return true;
             return levelDirs.Any(d => path.Equals($"maps/{d}/{d.Substring(d.LastIndexOf('/') + 1)}.igz", StringComparison.OrdinalIgnoreCase));
         }
 

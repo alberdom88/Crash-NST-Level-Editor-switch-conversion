@@ -126,8 +126,13 @@ Dettagli:
 - `--zoneinfo-da <livello>` (con `--nuovo`): livello originale Switch da cui prendere la zone
   info. Senza l'opzione il convertitore sceglie da solo: per un livello creato da uno
   originale (`L112_RoadToNowhere_Custom`) quell'originale, altrimenti il primo livello del
-  gioco impostato nell'editor (Crash Mode, che può essere diverso dalla cartella del
-  livello): `L101_NSanityBeach`, `L201_TurtleWoods` o `L301_ToadVillage`. Con `pc` usa la
+  gioco impostato nell'editor (Crash Mode): `L101_NSanityBeach`, `L201_TurtleWoods` o
+  `L301_ToadVillage`. Se il livello è nella cartella di un altro gioco (Crash Mode cambiato
+  dopo averlo creato, per esempio `Crash2/Custom_Level` impostato come Crash 1) passa nella
+  cartella del gioco dell'editor, come con `--gioco`: cartella e zone info devono essere dello
+  stesso gioco. Fino alla v37 il livello restava nella sua cartella con la zone info dell'altro
+  gioco, e il gioco restava su LOADING (Level 10 e 11). Per tenerlo nella sua cartella usa
+  `--gioco` con il gioco della cartella (il livello segue allora le regole di quel gioco). Con `pc` usa la
   zone info dell'editor convertita, che però blocca il gioco sul logo all'avvio diretto (e
   `--gioco` e `--memoria` non si applicano). Nella zone info di Crash 3 presa da un originale
   l'intro "magic moment" viene sempre spenta: accesa, il gioco aspetta un'intro che non c'è e
@@ -158,8 +163,11 @@ Dettagli:
   ha nel dump) con dentro anche quella del livello nuovo: si installa al posto del
   `chunkInfos.pak` del gioco, e `update.pak` non viene scritto.
 - `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
-  può ripetere). Per esempio `--escludi Octane` toglie gli asset importati da Crash Team Racing,
-  che la Switch non ha: il livello si carica senza quella parte di grafica.
+  può ripetere).
+- Asset di Crash Team Racing (`Octane` nel percorso): la Switch non li ha e la loro grafica non si
+  converte, quindi gli oggetti resterebbero senza modello. Dalla v38 restano fuori da soli (prima
+  serviva `--escludi Octane`): il livello si carica senza quella parte di grafica. Con `--ctr`
+  invece si convertono e se ne cerca la grafica nel dump di CTR.
 - `--ctr <cartella>` (**non usarlo**: nelle prove blocca il gioco al caricamento, perché i
   modelli di CTR usano file che Crash non ha, `vertexformat` e `indexformats`): dump di Crash
   Team Racing Nitro-Fueled per Switch. La grafica
@@ -194,6 +202,17 @@ Dettagli:
   stesso file (stesse entità, o quante in più e in meno). La sezione `FILE USATI DAL LIVELLO CHE
   SULLA SWITCH SONO SOLO NEGLI ARCHIVI DI ALTRI LIVELLI` elenca i file che i file convertiti
   usano e che sulla Switch stanno solo nell'archivio di un altro livello: il gioco non li trova.
+  Dalla v38 quelli che non sono pezzi di livello (banchi dei suoni, script...) vengono copiati
+  dall'archivio di quel livello, con le loro dipendenze (sezione `FILE PRESI DAGLI ARCHIVI DI
+  ALTRI LIVELLI`); restano nell'elenco solo i file in `maps/` (telecamere, nemici di altri livelli).
+- Cartelle doppie del livello: quando nell'editor si cambia il Crash Mode, una parte dei file del
+  livello può restare nella cartella dell'altro gioco (`Crash2/Custom_Level` accanto a
+  `Crash1/Custom_Level`). Dalla v38 finiscono tutti nella cartella del livello; un file con lo
+  stesso nome di uno della cartella del livello resta dov'è, e se è vuoto (il file principale
+  senza entità lasciato dall'editor) viene tolto, perché avrebbe lo stesso nome interno del file
+  principale del livello.
+- Ogni igz convertito viene riletto: quelli che il convertitore non riesce a rileggere sono
+  nella sezione `FILE CONVERTITI CHE NON SI RILEGGONO`, primi sospetti se il livello si blocca.
 - `--solo-usati`: i file di altri livelli che l'editor mette nel pacchetto fanno parte del
   livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello come
   il pavimento), quindi restano. Da quei file toglie solo:
@@ -210,6 +229,10 @@ Dettagli:
   materiali e texture che nessun file del livello usa più (i file usati si leggono da tutti i
   riferimenti e da tutti i testi degli igz, compresi i percorsi dei modelli). Il rapporto elenca
   le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA NON USATA`).
+  Un file da cui si tolgono tutte le entità resta fuori dall'archivio e dal pacchetto: fino alla
+  v37 veniva scritto con la lista vuota, non si rileggeva e il livello restava su LOADING
+  (`L304_BoneYard_Art` in Level 11). Se un file con le entità tolte non si rilegge, viene tenuto
+  com'era, senza toglierle.
   Nella v35 l'opzione contava come file mancante anche `metaobject` (i tipi del motore) e
   toglieva tutti i nemici, i massi e le staccionate dei file di altri livelli: dalla v36 restano.
 - `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli (nel
