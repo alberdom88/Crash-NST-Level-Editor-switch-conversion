@@ -227,6 +227,13 @@ Dettagli:
   11 si carica solo togliendo i nemici di Under Pressure e le corsie e i nemici di Orient Express e
   Midnight Run. Le decorazioni restano. Il rapporto le elenca in `FILE DI ALTRI LIVELLI CAMBIATI`
   (righe `modalita'`); `--tieni-entita-modalita` le lascia tutte.
+- Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
+  materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
+  nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi
+  che il PC non conosce (il ciclo delle dipendenze li saltava). Quelli che mancano si aggiungono
+  dall'archivio Switch del file che li usa, o da un altro archivio che li ha: sezione `DIPENDENZE
+  DELLA GRAFICA AGGIUNTE ALLA FINE`. Senza, quella grafica resta senza materiale o senza texture
+  (è il primo sospetto per il pavimento nero del Level 10, su cui Crash cammina senza vederlo).
 - Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
   controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
   hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non
@@ -247,8 +254,10 @@ Dettagli:
 
   I file di altri livelli fuori dal pacchetto non si toccano. Poi toglie dall'archivio modelli,
   materiali e texture che nessun file del livello usa più (i file usati si leggono da tutti i
-  riferimenti e da tutti i testi degli igz, compresi i percorsi dei modelli). Il rapporto elenca
-  le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA NON USATA`).
+  riferimenti e da tutti i testi degli igz, compresi i percorsi dei modelli; dalla v40 anche i
+  riferimenti per hash con nomi che il PC non conosce, che prima non contavano). Il rapporto elenca
+  le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA NON USATA`: le
+  20 più grandi, e tutte in fondo al rapporto nelle righe `grafica non usata`).
   Un file da cui si tolgono tutte le entità resta fuori dall'archivio e dal pacchetto: fino alla
   v37 veniva scritto con la lista vuota, non si rileggeva e il livello restava su LOADING
   (`L304_BoneYard_Art` in Level 11). Se un file con le entità tolte non si rilegge, viene tenuto

@@ -2785,7 +2785,95 @@ namespace NST
             }
 
             // --solo-usati: modelli, materiali e texture che dopo lo sfoltimento non usa piu' nessun file del livello
-            if (options.OnlyUsed) RemoveUnusedFiles(output, report);
+            if (options.OnlyUsed)
+            {
+                // i file tolti si possono rimettere sotto, se qualcosa li usa
+                foreach (IgArchiveFile removed in RemoveUnusedFiles(output, report, lines)) included.Remove(removed.Path.ToLowerInvariant());
+            }
+
+            // Dipendenze della grafica presa dagli originali Switch (modelli e materiali: i loro materiali e le loro texture)
+            // che non sono nell'archivio ne' negli archivi comuni del gioco, comprese quelle indicate per hash (EXID) con
+            // nomi che il PC non conosce, che il ciclo delle dipendenze non riconosceva: senza, la grafica resta senza
+            // materiale o senza texture. Si aggiungono dall'archivio Switch del file che le usa, o da un altro che le ha
+            var graphicsDependencies = new List<string>();
+            {
+                var levelArchiveSet = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
+                    .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
+                var commonNames = new HashSet<string>();
+                var switchByName = new Dictionary<string, List<IgArchiveFile>>();
+                var hashNames = new Dictionary<uint, string>();
+                foreach (var (archiveName, archiveFiles) in sw.ByArchive)
+                {
+                    foreach (IgArchiveFile archiveFile in archiveFiles)
+                    {
+                        string lowerPath = archiveFile.Path.ToLowerInvariant();
+                        string name = NamespaceUtils.GetFileName(lowerPath, false);
+                        hashNames.TryAdd(NamespaceUtils.ComputeHash(name), name);
+                        if (!levelArchiveSet.Contains(archiveName)) commonNames.Add(name);
+                        if (lowerPath.StartsWith("maps/") || lowerPath.StartsWith("packages/") || lowerPath.StartsWith("update/") ||
+                            lowerPath.Contains("staticcollision")) continue;
+                        if (!switchByName.TryGetValue(name, out List<IgArchiveFile>? list)) switchByName[name] = list = [];
+                        list.Add(archiveFile);
+                    }
+                }
+                var outputNames = new HashSet<string>(output.Files.Select(f => NamespaceUtils.GetFileName(f.Path, false).ToLowerInvariant()));
+                var archiveOfPath = new Dictionary<string, string>();
+                foreach (IgArchiveFile original in fromSwitch)
+                    if (sw.ArchiveOf.TryGetValue(original, out string? archiveName)) archiveOfPath.TryAdd(original.Path.ToLowerInvariant(), archiveName);
+
+                static bool IsGraphicsPath(string path) =>
+                    path.StartsWith("models/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("materialinstances/", StringComparison.OrdinalIgnoreCase);
+                var pending = new Queue<IgArchiveFile>(output.Files.Where(f => f.IsIGZ() && IsGraphicsPath(f.Path)));
+                while (pending.Count > 0)
+                {
+                    IgArchiveFile user = pending.Dequeue();
+                    FixupCollection? fixups = RawFixups(user);
+                    if (fixups == null) continue;
+                    var referencedNames = new HashSet<string>();
+                    foreach (TDEP_Fixup.TDEP_Item item in fixups.TDEP)
+                    {
+                        if (!string.IsNullOrEmpty(item.path)) referencedNames.Add(NamespaceUtils.GetFileName(NormalizeFixupPath(item.path), false));
+                        if (!string.IsNullOrEmpty(item.name)) referencedNames.Add(NamespaceUtils.GetFileName(item.name, false).ToLowerInvariant());
+                    }
+                    foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+                        if (!string.IsNullOrEmpty(reference.namespaceName)) referencedNames.Add(reference.namespaceName.ToLowerInvariant());
+
+                    foreach (string referenced in referencedNames)
+                    {
+                        string name = referenced;
+                        if (name.All(char.IsDigit))
+                        {
+                            if (!uint.TryParse(name, out uint hash) || !hashNames.TryGetValue(hash, out string? resolved)) continue;
+                            name = resolved;
+                        }
+                        if (name.Length == 0 || name.StartsWith("meta") || outputNames.Contains(name) || commonNames.Contains(name)) continue;
+
+                        string? userArchive = archiveOfPath.GetValueOrDefault(user.Path.ToLowerInvariant());
+                        List<IgArchiveFile>? candidates = null;
+                        if (userArchive != null && sw.Names(userArchive).TryGetValue(name, out List<IgArchiveFile>? inArchive)) candidates = inArchive;
+                        else if (switchByName.TryGetValue(name, out List<IgArchiveFile>? anywhere))
+                        {
+                            candidates = new List<IgArchiveFile> { anywhere[0] };
+                            if (sw.ArchiveOf.TryGetValue(anywhere[0], out string? firstArchive) &&
+                                sw.Names(firstArchive).TryGetValue(name, out List<IgArchiveFile>? sameArchive)) candidates = sameArchive;
+                        }
+                        if (candidates == null) continue;  // non c'e' nel gioco Switch: lo dicono le altre sezioni
+
+                        outputNames.Add(name);
+                        foreach (IgArchiveFile dependency in candidates)
+                        {
+                            string key = dependency.Path.ToLowerInvariant();
+                            if (included.Contains(key)) continue;
+                            AddOriginal(dependency, "dipendenze della grafica aggiunte (anche per hash)");
+                            string dependencyArchive = sw.ArchiveOf.GetValueOrDefault(dependency) ?? "?";
+                            archiveOfPath.TryAdd(key, dependencyArchive);
+                            graphicsDependencies.Add($"  {dependency.Path} da {dependencyArchive}.pak (usato da {NamespaceUtils.GetFileName(user.Path)})");
+                            lines.Add($"dipendenza della grafica: {dependency.Path} (da {user.Path})");
+                            if (dependency.IsIGZ()) pending.Enqueue(dependency);
+                        }
+                    }
+                }
+            }
 
             // Il pacchetto elenca i file del livello, come quello del PC: i file di altri livelli (maps/...) che l'editor
             // copia per gli oggetti presi da li' ci sono solo se li elenca il pacchetto del PC (il gioco li carica interi,
@@ -3002,6 +3090,14 @@ namespace NST
                 if (copiedFromLevels.Count > 80) report.AppendLine($"  ... e altri {copiedFromLevels.Count - 80}");
                 report.AppendLine();
             }
+            report.AppendLine($"=== DIPENDENZE DELLA GRAFICA AGGIUNTE ALLA FINE ({graphicsDependencies.Count}) ===");
+            report.AppendLine("Materiali e texture usati dai modelli e dai materiali presi dagli originali Switch che mancavano");
+            report.AppendLine("(anche quelli indicati solo per hash, o tolti per sbaglio da --solo-usati): aggiunti dall'archivio Switch");
+            report.AppendLine("del file che li usa. Senza, quella grafica resterebbe senza materiale o senza texture (nera o invisibile).");
+            if (graphicsDependencies.Count == 0) report.AppendLine("  nessuna: non ne mancava nessuna");
+            foreach (string line in graphicsDependencies.Take(80)) report.AppendLine(line);
+            if (graphicsDependencies.Count > 80) report.AppendLine($"  ... e altre {graphicsDependencies.Count - 80}");
+            report.AppendLine();
             if (unreadableFiles.Count > 0)
             {
                 report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
@@ -3872,7 +3968,7 @@ namespace NST
         /// leggere gli oggetti: anche un file che l'editor non sa rileggere conta. Tutti gli altri file, compresi quelli di
         /// altri livelli, restano e fanno da punto di partenza. Il pacchetto non conta come uso (si ricostruisce dopo).
         /// </summary>
-        private static void RemoveUnusedFiles(IgArchive output, StringBuilder report)
+        private static List<IgArchiveFile> RemoveUnusedFiles(IgArchive output, StringBuilder report, List<string> lines)
         {
             bool Removable(IgArchiveFile file)
             {
@@ -3891,6 +3987,10 @@ namespace NST
                 if (!byName.TryGetValue(name, out List<IgArchiveFile>? list)) byName[name] = list = [];
                 list.Add(file);
             }
+            // riferimenti per hash (EXID) a file che il PC non conosce (nomi della Switch): fino alla v39 non contavano e
+            // quei file potevano essere tolti anche se usati
+            var byHash = new Dictionary<uint, string>();
+            foreach (string name in byName.Keys) byHash.TryAdd(NamespaceUtils.ComputeHash(name), name);
 
             var deps = new Dictionary<IgArchiveFile, HashSet<string>>();
             foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) &&
@@ -3901,7 +4001,7 @@ namespace NST
                 {
                     report.AppendLine($"--solo-usati: {file.Path} non leggibile: non tolgo nessun file");
                     report.AppendLine();
-                    return;
+                    return [];
                 }
                 deps[file] = names;
             }
@@ -3912,10 +4012,14 @@ namespace NST
             {
                 IgArchiveFile file = queue.Dequeue();
                 if (!deps.TryGetValue(file, out HashSet<string>? names)) continue;
-                foreach (string name in names)
+                foreach (string referenced in names)
+                {
+                    string name = referenced;
+                    if (name.All(char.IsDigit) && uint.TryParse(name, out uint hash) && byHash.TryGetValue(hash, out string? resolved)) name = resolved;
                     if (byName.TryGetValue(name, out List<IgArchiveFile>? targets))
                         foreach (IgArchiveFile target in targets)
                             if (reached.Add(target)) queue.Enqueue(target);
+                }
             }
 
             var unused = files.Where(x => !reached.Contains(x)).ToList();
@@ -3925,8 +4029,10 @@ namespace NST
             report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) di modelli, materiali e texture che nessun file del livello usa");
             foreach (IgArchiveFile file in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
                 report.AppendLine($"  {Mb((ulong)file.UncompressedSize),10}  {file.Path}");
-            if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20}");
+            if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20} (tutti in fondo al rapporto, righe \"grafica non usata\")");
             report.AppendLine();
+            foreach (IgArchiveFile file in unused.OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)) lines.Add($"grafica non usata (tolta): {file.Path}");
+            return unused;
         }
 
         /// <summary>
