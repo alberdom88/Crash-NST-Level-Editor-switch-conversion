@@ -57,7 +57,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--originale-switch <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
-        [--riflessi auto|si|no]
+        [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -242,6 +242,20 @@ Dettagli:
   (`Arctic_Enemy_Immobile_Penguin`, con quelli Level 10 resta su LOADING; foche e altri pinguini
   restano). Righe `blocca il caricamento` nel rapporto; anche queste restano con
   `--tieni-entita-modalita`.
+- Modelli delle entità indicati per nome (dalla v42): i dati di molte entità (casse, piattaforme,
+  blocchi di collisione) indicano il modello con un testo (`_modelName`, `_skinName`, per esempio
+  `Levels\Crash1\crates\Crash_Crate_Nitro`), che i controlli sui riferimenti non vedevano. La
+  sezione `MODELLI DELLE ENTITA' INDICATI PER NOME` li elenca tutti con dove stanno (nell'archivio,
+  negli archivi comuni, solo nell'archivio di un altro livello, da nessuna parte); quelli che sulla
+  Switch stanno solo nell'archivio di un altro livello vengono copiati, con le loro dipendenze.
+  Elenca anche i blocchi di collisione (`CDynamicClipEntity`, per esempio quelli di
+  `L218_ColdHardCrash_FakeCollisionToBeReplaced`) con il modello che mostrano: senza modello si
+  cammina sopra ma non si vedono (il ghiaccio invisibile del Level 10?). I blocchi senza modello
+  prendono quello dei blocchi dell'originale Switch, se ne hanno uno.
+- `--modello-blocchi <testo del file>=<modello>` (dalla v42, si può ripetere): i blocchi di
+  collisione dei file di altri livelli con il testo nel percorso mostrano il modello indicato, nel
+  formato dell'editor (`Levels\Crash2\...\Nome`, senza `models/` e senza `.igz`). Serve a far vedere
+  un pavimento fatto solo di blocchi di collisione senza aprire l'editor.
 - Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
   materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
   nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi

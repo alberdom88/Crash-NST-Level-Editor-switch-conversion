@@ -100,6 +100,9 @@ namespace NST
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
             public string Reflections = "auto";
+            // converti: modello da mostrare sui blocchi di collisione (CDynamicClipEntity) dei file di altri livelli,
+            // "<testo nel percorso>=<modello>" (per esempio L218=Levels\Crash2\...\Modello)
+            public List<(string file, string model)> ClipModels = [];
             // Errori nella riga di comando (opzioni sconosciute, valori mancanti o non validi)
             public List<string> Errors = [];
         }
@@ -109,7 +112,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi",
+            "--riflessi", "--modello-blocchi",
         ];
 
         public static int Run(string[] args)
@@ -205,6 +208,14 @@ namespace NST
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
+                else if (name == "--modello-blocchi" && hasValue)
+                {
+                    string value = rest[i + 1];
+                    int equals = value.IndexOf('=');
+                    if (equals <= 0 || equals == value.Length - 1) options.Errors.Add($"--modello-blocchi {value}: serve <testo del file>=<modello>");
+                    else options.ClipModels.Add((value.Substring(0, equals).Trim(), value.Substring(equals + 1).Trim()));
+                    rest.RemoveRange(i, 2);
+                }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
@@ -235,7 +246,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2495,6 +2506,48 @@ namespace NST
                                 }
                             }
 
+                            // Blocchi di collisione (CDynamicClipEntity) senza modello: si cammina sopra ma non si vedono. Con
+                            // --modello-blocchi prendono il modello indicato; altrimenti quello dei blocchi dell'originale Switch,
+                            // se lo hanno
+                            List<CDynamicClipEntityData> clipData = igz.Objects.OfType<CDynamicClipEntityData>().ToList();
+                            if (clipData.Count > 0)
+                            {
+                                string? clipModel = options.ClipModels.Where(c => path.Contains(c.file, StringComparison.OrdinalIgnoreCase))
+                                                                      .Select(c => c.model).LastOrDefault();
+                                string clipSource = "--modello-blocchi";
+                                if (clipModel == null && original != null && clipData.Any(d => string.IsNullOrWhiteSpace(d._modelName)))
+                                {
+                                    try
+                                    {
+                                        List<string> switchModels = original.ToIgzFile().Objects.OfType<CDynamicClipEntityData>()
+                                            .Select(d => d._modelName ?? "").Where(m => m.Trim().Length > 0).Distinct().ToList();
+                                        if (switchModels.Count == 1)
+                                        {
+                                            clipModel = switchModels[0];
+                                            clipSource = "come nell'originale Switch";
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // originale non leggibile: i blocchi restano come sono
+                                    }
+                                }
+                                if (clipModel != null)
+                                {
+                                    var changedData = clipData.Where(d => options.ClipModels.Count > 0 && clipSource == "--modello-blocchi"
+                                                                              ? d._modelName != clipModel
+                                                                              : string.IsNullOrWhiteSpace(d._modelName)).ToList();
+                                    foreach (CDynamicClipEntityData data in changedData) data._modelName = clipModel;
+                                    if (changedData.Count > 0)
+                                    {
+                                        modified = true;
+                                        int blocks = igz.Objects.OfType<CDynamicClipEntity>().Count(c => changedData.Contains(c._entityData as CDynamicClipEntityData));
+                                        Increment(counters, "blocchi di collisione con un modello");
+                                        removedEntities.Add($"  modello dei blocchi, {path}: {blocks} blocchi mostrano {clipModel} ({clipSource})");
+                                    }
+                                }
+                            }
+
                             if (options.OnlyUsed && inPcPackage)
                             {
                                 // Decorazioni (solo modello e collisione) che usano modelli che la Switch non ha: sulla Switch non si
@@ -2722,6 +2775,116 @@ namespace NST
                         lines.Add($"preso da {archive}.pak (usato da {who}): {dependency.Path}");
                         copiedFromLevels.Add($"  {dependency.Path} da {archive}.pak (usato da {who})");
                     }
+                }
+            }
+
+            // Modelli indicati per nome nei dati delle entita' (CGameEntityData._modelName e _skinName: casse, piattaforme,
+            // blocchi che si vedono...). Sono testi, che i controlli sui riferimenti non vedevano: quelli che sulla Switch
+            // stanno solo negli archivi di altri livelli si copiano (le loro dipendenze si aggiungono sotto). Il rapporto li
+            // elenca tutti, insieme ai blocchi di collisione (CDynamicClipEntity) e al modello che mostrano
+            var entityModels = new List<string>();
+            var clipBlocks = new List<string>();
+            {
+                var originalPaths = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+                var levelArchiveSet = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
+                    .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
+                var archivesOfPath = new Dictionary<string, List<string>>();
+                foreach (var (archiveFile, archiveName) in sw.ArchiveOf)
+                {
+                    string key = archiveFile.Path.ToLowerInvariant();
+                    if (!archivesOfPath.TryGetValue(key, out List<string>? archives)) archivesOfPath[key] = archives = [];
+                    if (!archives.Contains(archiveName)) archives.Add(archiveName);
+                }
+                var outputPaths = new HashSet<string>(output.Files.Select(f => f.Path.ToLowerInvariant()));
+                var modelUsers = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+                var modelTexts = new Dictionary<string, string>();
+
+                static string ClipModels(IEnumerable<CDynamicClipEntity> clips) => string.Join(", ", clips
+                    .Select(c => (c._entityData as CGameEntityData)?._modelName)
+                    .Select(m => string.IsNullOrWhiteSpace(m) ? "nessuno (invisibili)" : m)
+                    .Distinct());
+
+                foreach (IgArchiveFile converted in output.Files.ToList())
+                {
+                    string lower = converted.Path.ToLowerInvariant();
+                    if (!converted.IsIGZ() || !lower.StartsWith("maps/") || originalPaths.Contains(lower)) continue;
+                    IgzFile convertedIgz;
+                    try
+                    {
+                        convertedIgz = converted.ToIgzFile();
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                    string fileName = NamespaceUtils.GetFileName(converted.Path);
+                    foreach (CGameEntityData data in convertedIgz.Objects.OfType<CGameEntityData>())
+                    {
+                        foreach (string? modelName in new[] { data._modelName, data._skinName })
+                        {
+                            string? modelPath = ModelPathFromName(modelName);
+                            if (modelPath == null) continue;
+                            if (!modelUsers.TryGetValue(modelPath, out SortedSet<string>? users))
+                            {
+                                modelUsers[modelPath] = users = new SortedSet<string>(StringComparer.Ordinal);
+                                modelTexts[modelPath] = modelName!;
+                            }
+                            users.Add(fileName);
+                        }
+                    }
+
+                    List<CDynamicClipEntity> clips = convertedIgz.Objects.OfType<CDynamicClipEntity>().ToList();
+                    if (clips.Count == 0) continue;
+                    string switchClips = "";
+                    if (sw.ByPath.TryGetValue(lower, out IgArchiveFile? switchVersion))
+                    {
+                        try
+                        {
+                            List<CDynamicClipEntity> originalClips = switchVersion.ToIgzFile().Objects.OfType<CDynamicClipEntity>().ToList();
+                            switchClips = $"; originale Switch: {originalClips.Count} blocchi, modello {ClipModels(originalClips)}";
+                        }
+                        catch (Exception e)
+                        {
+                            switchClips = $"; originale Switch non leggibile ({e.Message})";
+                        }
+                    }
+                    clipBlocks.Add($"  {converted.Path}: {clips.Count} blocchi, modello {ClipModels(clips)}{switchClips}");
+                }
+
+                foreach (var (modelPath, users) in modelUsers)
+                {
+                    string who = string.Join(", ", users.Take(3)) + (users.Count > 3 ? $" e altri {users.Count - 3}" : "");
+                    string status;
+                    if (outputPaths.Contains(modelPath))
+                    {
+                        status = "nell'archivio";
+                    }
+                    else if (archivesOfPath.TryGetValue(modelPath, out List<string>? archives))
+                    {
+                        if (archives.Any(a => !levelArchiveSet.Contains(a)))
+                        {
+                            status = "negli archivi comuni del gioco";
+                        }
+                        else
+                        {
+                            string archive = archives[0];
+                            string name = NamespaceUtils.GetFileName(modelPath, false);
+                            var copied = new List<string>();
+                            foreach (IgArchiveFile modelFile in sw.Names(archive).GetValueOrDefault(name) ?? new List<IgArchiveFile>())
+                            {
+                                if (included.Contains(modelFile.Path.ToLowerInvariant())) continue;
+                                AddOriginal(modelFile, "modelli delle entita' presi da archivi di altri livelli");
+                                copied.Add(NamespaceUtils.GetFileName(modelFile.Path));
+                                lines.Add($"modello di un'entita' preso da {archive}.pak (usato da {who}): {modelFile.Path}");
+                            }
+                            status = $"solo nell'archivio di {archive}: copiato ({string.Join(", ", copied)})";
+                        }
+                    }
+                    else
+                    {
+                        status = "NON C'E' nel gioco Switch: quelle entita' non si vedono";
+                    }
+                    entityModels.Add($"  {modelTexts[modelPath]}: {status} (usato da {who})");
                 }
             }
 
@@ -3129,6 +3292,15 @@ namespace NST
                 if (copiedFromLevels.Count > 80) report.AppendLine($"  ... e altri {copiedFromLevels.Count - 80}");
                 report.AppendLine();
             }
+            report.AppendLine($"=== MODELLI DELLE ENTITA' INDICATI PER NOME ({entityModels.Count}) ===");
+            report.AppendLine("Modelli scritti nei dati delle entita' (_modelName, _skinName: casse, piattaforme, blocchi...) e dove");
+            report.AppendLine("stanno. Quelli che sulla Switch sono solo nell'archivio di un altro livello vengono copiati.");
+            foreach (string line in entityModels.Take(80)) report.AppendLine(line);
+            if (entityModels.Count > 80) report.AppendLine($"  ... e altri {entityModels.Count - 80}");
+            report.AppendLine("Blocchi di collisione (CDynamicClipEntity: si cammina sopra, si vede solo il loro modello):");
+            if (clipBlocks.Count == 0) report.AppendLine("  nessuno");
+            foreach (string line in clipBlocks) report.AppendLine(line);
+            report.AppendLine();
             report.AppendLine($"=== DIPENDENZE DELLA GRAFICA AGGIUNTE ALLA FINE ({graphicsDependencies.Count}) ===");
             report.AppendLine("Materiali e texture usati dai modelli e dai materiali presi dagli originali Switch che mancavano");
             report.AppendLine("(anche quelli indicati solo per hash, o tolti per sbaglio da --solo-usati): aggiunti dall'archivio Switch");
@@ -4408,6 +4580,23 @@ namespace NST
                 if (name.Contains(fragment, StringComparison.OrdinalIgnoreCase) ||
                     references.Any(r => r.Contains(fragment, StringComparison.OrdinalIgnoreCase))) return description;
             return null;
+        }
+
+        /// <summary>
+        /// Percorso (minuscolo) del modello indicato nei dati di un'entita' ("Levels\Crash1\crates\Crash_Crate_Nitro" ->
+        /// models/levels/crash1/crates/crash_crate_nitro.igz); null se vuoto
+        /// </summary>
+        private static string? ModelPathFromName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            string p = name.Trim().Replace('\\', '/');
+            int colon = p.IndexOf(':');
+            if (colon >= 0) p = p.Substring(colon + 1);
+            p = p.TrimStart('/');
+            if (p.Length == 0) return null;
+            if (!p.StartsWith("models/", StringComparison.OrdinalIgnoreCase)) p = "models/" + p;
+            if (!p.EndsWith(".igz", StringComparison.OrdinalIgnoreCase)) p += ".igz";
+            return p.ToLowerInvariant();
         }
 
         private static string ModeDescription(string mode) => mode switch
