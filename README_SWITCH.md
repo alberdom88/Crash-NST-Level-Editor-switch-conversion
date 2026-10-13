@@ -53,7 +53,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
-        [--solo-usati] [--togli-entita [file:]testo]... [--originale-switch <testo>]...
+        [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]...
+        [--originale-switch <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
@@ -213,6 +214,25 @@ Dettagli:
   principale del livello.
 - Ogni igz convertito viene riletto: quelli che il convertitore non riesce a rileggere sono
   nella sezione `FILE CONVERTITI CHE NON SI RILEGGONO`, primi sospetti se il livello si blocca.
+- Entità di livelli con un'altra modalità (dalla v39, sempre, anche senza `--solo-usati`): dai
+  file di altri livelli nel pacchetto si tolgono le entità con un comportamento (personaggi,
+  nemici, spline delle corsie, oggetti che si muovono: quelle che usano `metaobject`) se vengono
+  da un livello con una modalità che il livello convertito non ha, e da tutti i boss. Le
+  modalità sono quelle che l'editor assegna ai livelli originali: sub (Under Pressure, Deep
+  Trouble), tigre (Orient Express, Midnight Run), orso (Bear It, Bear Down, Un-Bearable, Totally
+  Bear), cinghiale (Hog Wild, Whole Hog), moto, moto d'acqua, aereo, jetpack, scavo, masso
+  (Boulders, Boulder Dash, Crash Dash, Crash Crush, Un-Bearable). Il livello convertito ha quelle
+  scelte nell'editor (`{bear}`, `{boulder}`... nella zone info del PC; nessuna con `--nuovo
+  --senza-modalita`). Quelle entità aspettano la loro modalità e il gioco resta su LOADING: Level
+  11 si carica solo togliendo i nemici di Under Pressure e le corsie e i nemici di Orient Express e
+  Midnight Run. Le decorazioni restano. Il rapporto le elenca in `FILE DI ALTRI LIVELLI CAMBIATI`
+  (righe `modalita'`); `--tieni-entita-modalita` le lascia tutte.
+- Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
+  controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
+  hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non
+  contengono l'oggetto usato. In un file preso dagli originali Switch vuol dire che la Switch ce
+  l'ha diverso dal PC (per esempio un insieme di materiali senza il materiale che un'entità usa:
+  quella grafica resta senza materiale); in un file convertito di solito è un'entità tolta.
 - `--solo-usati`: i file di altri livelli che l'editor mette nel pacchetto fanno parte del
   livello (il gioco carica tutte le loro entità, e lì dentro ci sono anche pezzi del livello come
   il pavimento), quindi restano. Da quei file toglie solo:

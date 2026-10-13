@@ -94,6 +94,9 @@ namespace NST
             // converti: file di altri livelli (testo nel percorso) presi dall'originale Switch invece di convertire
             // la copia del PC, con le loro dipendenze dallo stesso archivio Switch
             public List<string> SwitchOriginals = [];
+            // converti: non togliere le entita' con un comportamento prese da livelli con una modalita' che il livello
+            // non ha (sub, tigre, orso, moto d'acqua...) e dai boss (dalla v39 si tolgono da sole)
+            public bool KeepModeEntities;
             // Errori nella riga di comando (opzioni sconosciute, valori mancanti o non validi)
             public List<string> Errors = [];
         }
@@ -196,6 +199,7 @@ namespace NST
                 else if (name == "--aggiungi-intro") { options.AddIntro = true; rest.RemoveAt(i); }
                 else if (name == "--senza-modalita") { options.WithoutMode = true; rest.RemoveAt(i); }
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
+                else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
@@ -224,7 +228,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2138,6 +2142,11 @@ namespace NST
             if (pcZoneFiles.Count == 0) pcZoneFiles = pc.Files.ToList();
             EGameYear? editorYear = PcZoneInfoYear(pcZoneFiles);
             bool editorJetski = PcZoneInfoUsesJetski(pcZoneFiles);
+            // Modalita' del livello: quelle scelte nell'editor ({bear}, {boulder}, {swim}... e il veicolo), che la
+            // registrazione riporta nella zone info (con --nuovo --senza-modalita nessuna)
+            HashSet<string> levelModes = options.NewLevel && options.WithoutMode
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : PcZoneInfoModes(pcZoneFiles);
             bool addIntro = !options.WithoutIntro &&
                             (options.AddIntro || (options.Game == "crash3" && editorYear != EGameYear.eGY_2017_Crash3));
             if (options.WithoutIntro && options.AddIntro)
@@ -2433,6 +2442,31 @@ namespace NST
                                 modified = true;
                                 counters["entita' tolte (--togli-entita)"] = counters.GetValueOrDefault("entita' tolte (--togli-entita)") + chosen.Count;
                                 removedEntities.Add($"  --togli-entita, {path}: {chosen.Count} entita' ({removedObjects.Count} oggetti): {names}");
+                            }
+
+                            // Entita' con un comportamento (personaggi, nemici, spline delle corsie, oggetti che si muovono) di
+                            // livelli con una modalita' che questo livello non ha (sub, tigre, orso, moto d'acqua...) e dei boss:
+                            // aspettano quella modalita' e il gioco resta su LOADING (Level 11 con i nemici di Under Pressure e
+                            // le corsie di Orient Express e Midnight Run). Solo nei file nel pacchetto, di cui il gioco carica
+                            // tutte le entita'. Le decorazioni restano; --tieni-entita-modalita le lascia tutte
+                            var sourceLevel = SourceLevelModes(path);
+                            if (inPcPackage && !options.KeepModeEntities && sourceLevel != null && !sourceLevel.Value.modes.Overlaps(levelModes))
+                            {
+                                var modeEntities = igz.Objects.OfType<igEntity>()
+                                    .Where(e => Refs(e).Any(r => r.Contains("metaobject")))
+                                    .Cast<igObject>()
+                                    .ToHashSet();
+                                if (modeEntities.Count > 0)
+                                {
+                                    string names = string.Join(", ", modeEntities.Take(12).Select(e => e.ObjectName ?? "?")) + (modeEntities.Count > 12 ? $" e altre {modeEntities.Count - 12}" : "");
+                                    string modeText = string.Join("/", sourceLevel.Value.modes.Select(ModeDescription));
+                                    HashSet<igObject> removedObjects = igz.Remove(modeEntities);
+                                    modified = true;
+                                    counters["entita' di livelli con un'altra modalita' o di boss tolte"] =
+                                        counters.GetValueOrDefault("entita' di livelli con un'altra modalita' o di boss tolte") + modeEntities.Count;
+                                    removedEntities.Add($"  modalita', {path}: {modeEntities.Count} entita' ({removedObjects.Count} oggetti) di {sourceLevel.Value.level} " +
+                                                        $"({modeText}, che il livello non ha): {names}");
+                                }
                             }
 
                             if (options.OnlyUsed && inPcPackage)
@@ -2979,6 +3013,9 @@ namespace NST
             }
 
             AppendMissingDependencies(report, output, fromSwitch, sw);
+
+            Console.WriteLine("Controllo gli oggetti usati dal livello...");
+            AppendMissingObjects(report, output, fromSwitch, sw);
 
             AppendMemoryReport(report, output, sw, sizeReference);
 
@@ -3714,6 +3751,121 @@ namespace NST
         }
 
         /// <summary>
+        /// Riferimenti dei file convertiti dal PC a oggetti che il file a cui puntano non contiene: il file c'e' (nell'archivio
+        /// o negli archivi comuni del gioco Switch) ma senza quell'oggetto. In un file preso dagli originali Switch vuol dire
+        /// che la Switch ce l'ha diverso dal PC (per esempio un insieme di materiali senza il materiale che un'entita' usa: la
+        /// sua grafica resta senza materiale); in un file convertito di solito e' un'entita' tolta. Controlla anche i
+        /// riferimenti per hash (EXID), che gli altri controlli saltano
+        /// </summary>
+        private static void AppendMissingObjects(StringBuilder report, IgArchive output, List<IgArchiveFile> fromSwitch, ArchiveIndex sw)
+        {
+            var originals = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+            var levelArchives = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
+                .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
+
+            // File per nome (senza estensione, minuscolo): prima quelli dell'archivio del livello, poi quelli degli archivi
+            // comuni Switch (quelli degli archivi di altri livelli il gioco non li carica: li elenca gia' un'altra sezione)
+            var byName = new Dictionary<string, IgArchiveFile>();
+            foreach (IgArchiveFile file in output.Files)
+                if (file.IsIGZ() && !file.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase))
+                    byName.TryAdd(NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant(), file);
+            foreach (var (archive, files) in sw.ByArchive)
+            {
+                if (levelArchives.Contains(archive)) continue;
+                foreach (IgArchiveFile file in files)
+                    if (file.IsIGZ()) byName.TryAdd(NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant(), file);
+            }
+            var byHash = new Dictionary<uint, string>();
+            foreach (string name in byName.Keys) byHash.TryAdd(NamespaceUtils.ComputeHash(name), name);
+            var inOutput = new HashSet<IgArchiveFile>(output.Files);
+
+            // Nomi (e hash dei nomi) degli oggetti di un file, letti una volta; null se il file non si legge
+            var objectNames = new Dictionary<IgArchiveFile, (HashSet<string> names, HashSet<uint> hashes)?>();
+            (HashSet<string> names, HashSet<uint> hashes)? ObjectNames(IgArchiveFile file)
+            {
+                if (objectNames.TryGetValue(file, out var cached)) return cached;
+                (HashSet<string> names, HashSet<uint> hashes)? result = null;
+                try
+                {
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var hashes = new HashSet<uint>();
+                    foreach (igObject obj in file.ToIgzFile().Objects)
+                    {
+                        if (string.IsNullOrEmpty(obj.ObjectName)) continue;
+                        names.Add(obj.ObjectName);
+                        hashes.Add(NamespaceUtils.ComputeHash(obj.ObjectName));
+                    }
+                    result = (names, hashes);
+                }
+                catch
+                {
+                    // file non leggibile: i suoi oggetti non si controllano
+                }
+                objectNames[file] = result;
+                return result;
+            }
+
+            int checkedReferences = 0, unreadable = 0;
+            var missing = new Dictionary<string, (SortedSet<string> objects, SortedSet<string> users, bool switchVersion)>();
+            foreach (IgArchiveFile file in output.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!file.IsIGZ() || originals.Contains(lower) || lower.StartsWith("update/")) continue;
+                FixupCollection? fixups = RawFixups(file);
+                if (fixups == null) continue;
+                string own = NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant();
+                foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+                {
+                    string ns = (reference.namespaceName ?? "").ToLowerInvariant();
+                    string obj = reference.objectName ?? "";
+                    if (ns.Length == 0 || obj.Length == 0) continue;
+                    if (ns.All(char.IsDigit))
+                    {
+                        if (!uint.TryParse(ns, out uint nsHash) || !byHash.TryGetValue(nsHash, out string? resolved)) continue;
+                        ns = resolved;
+                    }
+                    if (ns.StartsWith("meta") || ns == own || !byName.TryGetValue(ns, out IgArchiveFile? target)) continue;
+                    var targetNames = ObjectNames(target);
+                    if (targetNames == null)
+                    {
+                        unreadable++;
+                        continue;
+                    }
+                    checkedReferences++;
+                    bool found = obj.All(char.IsDigit) && uint.TryParse(obj, out uint objHash)
+                        ? targetNames.Value.hashes.Contains(objHash)
+                        : targetNames.Value.names.Contains(obj) || targetNames.Value.hashes.Contains(NamespaceUtils.ComputeHash(obj));
+                    if (found) continue;
+
+                    bool switchVersion = !inOutput.Contains(target) || originals.Contains(target.Path.ToLowerInvariant());
+                    if (!missing.TryGetValue(target.Path, out var entry))
+                    {
+                        entry = (new SortedSet<string>(StringComparer.OrdinalIgnoreCase), new SortedSet<string>(StringComparer.OrdinalIgnoreCase), switchVersion);
+                        missing[target.Path] = entry;
+                    }
+                    entry.objects.Add(obj.All(char.IsDigit) ? "#" + obj : obj);
+                    entry.users.Add(NamespaceUtils.GetFileName(file.Path));
+                }
+            }
+
+            report.AppendLine($"=== OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO ({missing.Count}) ===");
+            report.AppendLine($"Controllati {checkedReferences} riferimenti dei file convertiti a oggetti di altri file" +
+                              (unreadable > 0 ? $" ({unreadable} verso file che non si leggono, saltati)" : "") + ". Qui i file che ci");
+            report.AppendLine("sono (nell'archivio o negli archivi comuni del gioco Switch) ma non contengono l'oggetto usato. In un file");
+            report.AppendLine("preso dagli originali Switch vuol dire che la Switch ce l'ha diverso dal PC (per esempio un materiale che");
+            report.AppendLine("manca: la grafica che lo usa resta senza); in un file convertito di solito e' un'entita' tolta.");
+            if (missing.Count == 0) report.AppendLine("  nessuno");
+            foreach (var (path, entry) in missing.OrderByDescending(m => m.Value.objects.Count).ThenBy(m => m.Key, StringComparer.Ordinal).Take(60))
+            {
+                string objects = string.Join(", ", entry.objects.Take(8)) + (entry.objects.Count > 8 ? $" e altri {entry.objects.Count - 8}" : "");
+                string users = string.Join(", ", entry.users.Take(3)) + (entry.users.Count > 3 ? $" e altri {entry.users.Count - 3}" : "");
+                report.AppendLine($"  {path} ({(entry.switchVersion ? "originale Switch" : "convertito")}): {entry.objects.Count} oggetti mancanti ({objects}); usati da {users}");
+            }
+            if (missing.Count > 60) report.AppendLine($"  ... e altri {missing.Count - 60}");
+            report.AppendLine();
+        }
+
+        /// <summary>
         /// --solo-usati: toglie dall'archivio modelli, materiali e texture (igz in models/, materialinstances/, textures/,
         /// loosetextures/) che nessun altro file del livello usa. I file usati si leggono dai fixup di ogni igz (dipendenze,
         /// riferimenti per nome e tutti i testi, compresi quelli dentro liste e memorie, come i percorsi dei modelli), senza
@@ -4020,6 +4172,75 @@ namespace NST
             }
             return false;
         }
+
+        /// <summary>
+        /// Modalita' scelte nell'editor: le opzioni speciali della zone info del PC ({bear}, {boulder}, {swim}...) e il
+        /// veicolo (moto d'acqua, aereo)
+        /// </summary>
+        private static HashSet<string> PcZoneInfoModes(List<IgArchiveFile> files)
+        {
+            var modes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (IgArchiveFile file in files)
+            {
+                if (!file.Path.EndsWith("_zoneinfo.igz", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    if (file.ToIgzFile().FindObject<CZoneInfo>() is not CZoneInfo zone) continue;
+                    foreach (string option in GameplayModeManager.GetSpecialZoneInfoOptions(zone._build)) modes.Add(option.ToLowerInvariant());
+                    string vehicle = zone._zoneVehicle ?? "";
+                    if (vehicle.Contains("jetski", StringComparison.OrdinalIgnoreCase)) modes.Add("jetski");
+                    if (vehicle.Contains("plane", StringComparison.OrdinalIgnoreCase)) modes.Add("plane");
+                    return modes;
+                }
+                catch
+                {
+                    // zone info non leggibile: si prova la prossima
+                }
+            }
+            return modes;
+        }
+
+        /// <summary>
+        /// Livello da cui viene un file di un altro livello (maps/&lt;gioco&gt;/&lt;livello&gt;/... o maps/&lt;gioco&gt;/Bosses/&lt;boss&gt;/...)
+        /// e le sue modalita', come le assegna l'editor (GameplayModeManager.GetSpecialLevelMode; Un-Bearable ha orso e
+        /// masso). I boss contano come una modalita' a parte, che un livello non ha mai. Null per i livelli normali e le mappe
+        /// </summary>
+        private static (string level, HashSet<string> modes)? SourceLevelModes(string path)
+        {
+            string[] parts = path.Split('/');
+            if (parts.Length < 4 || !parts[0].Equals("maps", StringComparison.OrdinalIgnoreCase)) return null;
+            if (parts[2].Equals("Bosses", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Length < 5) return null;
+                return (parts[3], new HashSet<string> { "boss" });
+            }
+
+            string level = parts[2];
+            if (level.Length < 4) return null;
+            string id = level.Substring(0, 4).ToUpperInvariant();
+            var modes = new HashSet<string>();
+            string? editorMode = GameplayModeManager.GetSpecialLevelMode(id);
+            if (editorMode != null && editorMode != "hub") modes.Add(editorMode);
+            if (id is "L104" or "L113" or "L205" or "L209" or "L215") modes.Add("boulder");
+            if (modes.Count == 0) return null;
+            return (level, modes);
+        }
+
+        private static string ModeDescription(string mode) => mode switch
+        {
+            "swim" => "sub",
+            "tiger" => "tigre",
+            "bear" => "orso",
+            "hog" => "cinghiale",
+            "bike" => "moto",
+            "jetski" => "moto d'acqua",
+            "plane" => "aereo",
+            "jetpack" => "jetpack",
+            "dig" => "scavo",
+            "boulder" => "masso",
+            "boss" => "boss",
+            _ => mode
+        };
 
         private static string DescribeZoneInfo(CZoneInfo zone)
         {
