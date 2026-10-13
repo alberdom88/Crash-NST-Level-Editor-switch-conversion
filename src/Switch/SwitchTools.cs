@@ -103,6 +103,9 @@ namespace NST
             // converti: modello da mostrare sui blocchi di collisione (CDynamicClipEntity) dei file di altri livelli,
             // "<testo nel percorso>=<modello>" (per esempio L218=Levels\Crash2\...\Modello)
             public List<(string file, string model)> ClipModels = [];
+            // converti: i blocchi di collisione dei file con il testo nel percorso prendono una copia che si vede (con il modello
+            // indicato, grande come il blocco) e che non blocca niente: "<testo>" o "<testo>=<modello>"
+            public List<(string file, string model)> FloorBlocks = [];
             // Errori nella riga di comando (opzioni sconosciute, valori mancanti o non validi)
             public List<string> Errors = [];
         }
@@ -112,7 +115,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi", "--modello-blocchi",
+            "--riflessi", "--modello-blocchi", "--pavimento-blocchi",
         ];
 
         public static int Run(string[] args)
@@ -208,6 +211,15 @@ namespace NST
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
+                else if (name == "--pavimento-blocchi" && hasValue)
+                {
+                    string value = rest[i + 1];
+                    int equals = value.IndexOf('=');
+                    if (equals == 0 || (equals > 0 && equals == value.Length - 1)) options.Errors.Add($"--pavimento-blocchi {value}: serve <testo del file> o <testo del file>=<modello>");
+                    else if (equals < 0) options.FloorBlocks.Add((value.Trim(), DefaultFloorModel));
+                    else options.FloorBlocks.Add((value.Substring(0, equals).Trim(), value.Substring(equals + 1).Trim()));
+                    rest.RemoveRange(i, 2);
+                }
                 else if (name == "--modello-blocchi" && hasValue)
                 {
                     string value = rest[i + 1];
@@ -246,7 +258,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<modello>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2576,6 +2588,50 @@ namespace NST
                             if (modified) modifiedOtherFiles.Add(target);
                         }
 
+                        // --pavimento-blocchi: i blocchi di collisione del file (si cammina sopra ma non si vedono) prendono una copia
+                        // che si vede, con il modello indicato e grande come il blocco, e che non blocca niente
+                        var floorBlocks = options.FloorBlocks.Where(f => path.Contains(f.file, StringComparison.OrdinalIgnoreCase)).ToList();
+                        if (floorBlocks.Count > 0 && igz.Objects.OfType<CDynamicClipEntity>().Any())
+                        {
+                            string floorModel = floorBlocks[^1].model;
+                            string? floorModelPath = ModelPathFromName(floorModel);
+                            IgArchiveFile? floorModelFile = floorModelPath == null ? null
+                                : output.Files.FirstOrDefault(f => f.Path.Equals(floorModelPath, StringComparison.OrdinalIgnoreCase)) ?? sw.ByPath.GetValueOrDefault(floorModelPath);
+                            string? boundsError = null;
+                            (THREE.Vector3 min, THREE.Vector3 max)? bounds = null;
+                            if (floorModelFile == null) boundsError = "modello non trovato nel gioco Switch";
+                            else
+                            {
+                                try
+                                {
+                                    if (floorModelFile.ToIgzFile().FindObject<igModelData>() is igModelData modelData)
+                                        bounds = (new THREE.Vector3(modelData._min._x, modelData._min._y, modelData._min._z),
+                                                  new THREE.Vector3(modelData._max._x, modelData._max._y, modelData._max._z));
+                                    else boundsError = "il modello non ha igModelData";
+                                }
+                                catch (Exception e)
+                                {
+                                    boundsError = $"modello non leggibile ({e.Message})";
+                                }
+                            }
+                            if (bounds == null || bounds.Value.max.X <= bounds.Value.min.X || bounds.Value.max.Y <= bounds.Value.min.Y || bounds.Value.max.Z <= bounds.Value.min.Z)
+                            {
+                                removedEntities.Add($"  ATTENZIONE --pavimento-blocchi, {path}: {floorModel}: {boundsError ?? "dimensioni del modello non valide"}, blocchi lasciati invisibili");
+                            }
+                            else
+                            {
+                                int added = AddVisibleClipCopies(igz, floorModel, bounds.Value.min, bounds.Value.max);
+                                if (added > 0)
+                                {
+                                    if (otherLevelFile) modifiedOtherFiles.Add(target);
+                                    counters["blocchi di collisione resi visibili (--pavimento-blocchi)"] =
+                                        counters.GetValueOrDefault("blocchi di collisione resi visibili (--pavimento-blocchi)") + added;
+                                    removedEntities.Add($"  pavimento visibile, {path}: {added} blocchi coperti da {floorModel} " +
+                                                        $"(modello da {FormatVector(bounds.Value.min)} a {FormatVector(bounds.Value.max)})");
+                                }
+                            }
+                        }
+
                         igz.GameVersion = GameVersion.NSX;
                         string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
 
@@ -2820,9 +2876,10 @@ namespace NST
                     string fileName = NamespaceUtils.GetFileName(converted.Path);
                     foreach (CGameEntityData data in convertedIgz.Objects.OfType<CGameEntityData>())
                     {
-                        foreach (string? modelName in new[] { data._modelName, data._skinName })
+                        // _modelName e' un modello (models/...), _skinName un personaggio (actors/..., come nell'editor)
+                        foreach (var (modelName, folder) in new[] { (data._modelName, "models"), (data._skinName, "actors") })
                         {
-                            string? modelPath = ModelPathFromName(modelName);
+                            string? modelPath = ModelPathFromName(modelName, folder);
                             if (modelPath == null) continue;
                             if (!modelUsers.TryGetValue(modelPath, out SortedSet<string>? users))
                             {
@@ -4582,11 +4639,108 @@ namespace NST
             return null;
         }
 
+        private static string FormatVector(THREE.Vector3 v) =>
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{v.X:0.#} {v.Y:0.#} {v.Z:0.#}");
+
+        // --pavimento-blocchi senza modello: il blocco di ghiaccio in cui resta Crash congelato (Totally Bear), che sembra ghiaccio
+        private const string DefaultFloorModel = "Characters\\Playable\\Crash\\Crash_IceBlock";
+
+        /// <summary>
+        /// --pavimento-blocchi: per ogni blocco di collisione (CDynamicClipEntity: un box da _min a _max nello spazio dell'entita')
+        /// aggiunge una copia che non blocca niente e mostra il modello, con posizione e scala scelte perche' il modello copra
+        /// esattamente il box. Torna quante copie ha aggiunto
+        /// </summary>
+        private static int AddVisibleClipCopies(IgzFile igz, string modelName, THREE.Vector3 modelMin, THREE.Vector3 modelMax)
+        {
+            THREE.Vector3 modelSize = modelMax - modelMin;
+            THREE.Vector3 modelCenter = (modelMin + modelMax) * 0.5f;
+            var clones = new Dictionary<igObject, igObject>();
+            int added = 0;
+            foreach (CDynamicClipEntity clip in igz.Objects.OfType<CDynamicClipEntity>().ToList())
+            {
+                THREE.Vector3 min = clip._min.ToVector3();
+                THREE.Vector3 max = clip._max.ToVector3();
+                THREE.Vector3 size = max - min;
+                if (size.X <= 0 || size.Y <= 0 || size.Z <= 0) continue;
+                THREE.Vector3 center = (min + max) * 0.5f;
+                THREE.Vector3 entityScale = clip._transform?._nonUniformPersistentParentSpaceScale.ToVector3() ?? new THREE.Vector3(1, 1, 1);
+                THREE.Quaternion rotation = clip._transform?._parentSpaceRotation.ToQuaternion() ?? new THREE.Quaternion();
+                // scala del modello e spostamento: modello * k centrato sul centro del box (nello spazio dell'entita')
+                THREE.Vector3 k = MathUtils.SafeDivide(size, modelSize);
+                THREE.Vector3 offset = (entityScale * (center - k * modelCenter)).ApplyQuaternion(rotation);
+
+                CDynamicClipEntity copy = igz.AddClone(clip, igz, clones);
+                copy._clipEnabled = false;
+                copy._clipTypeStorage = new CDynamicClipEntity.ClipTypeStorage
+                {
+                    _clipTeamHero = false,
+                    _clipNPCEnemies = false,
+                    _clipPlayers = false,
+                    _clipNPCAltEnemies = false,
+                    _clipWorld = false,
+                };
+                copy._parentSpacePosition = (clip._parentSpacePosition.ToVector3() + offset).ToVec3MetaField();
+                if (copy._transform == null)
+                {
+                    copy._transform = new igEntityTransform();
+                    if (clip._transform == null) copy._transform._parentSpaceRotation = new igVec3fMetaField(0, 0, 0);
+                }
+                copy._transform._nonUniformPersistentParentSpaceScale = (entityScale * k).ToVec3MetaField();
+                copy._transform._isDirty = true;
+                copy._min = modelMin.ToVec3MetaField();
+                copy._max = modelMax.ToVec3MetaField();
+
+                // La copia diventa un'entita' normale con un modello (come i totem di Bear It o le tende di The Great Hall),
+                // che il gioco disegna di sicuro: un blocco di collisione con un modello forse no
+                CGameEntity visible = CopyFieldsAs<CGameEntity>(copy);
+                ReplaceObject(igz, copy, visible);
+                if (copy._entityData is CGameEntityData clipData)
+                {
+                    if (!clones.TryGetValue(clipData, out igObject? converted) || converted is not CGameEntityData || converted == clipData)
+                    {
+                        CGameEntityData visibleData = CopyFieldsAs<CGameEntityData>(clipData);
+                        visibleData._modelName = modelName;
+                        ReplaceObject(igz, clipData, visibleData);
+                        clones[clipData] = visibleData;
+                        converted = visibleData;
+                    }
+                    visible._entityData = (CGameEntityData)converted;
+                }
+                added++;
+            }
+            return added;
+        }
+
+        /// <summary>
+        /// Nuovo oggetto di tipo T (una classe base di quello di partenza) con gli stessi valori nei campi che hanno in comune
+        /// </summary>
+        private static T CopyFieldsAs<T>(igObject source) where T : igObject, new()
+        {
+            var target = new T();
+            for (Type? type = typeof(T); type != null && type != typeof(object); type = type.BaseType)
+            {
+                if (!type.IsAssignableFrom(source.GetType())) continue;
+                foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    field.SetValue(target, field.GetValue(source));
+            }
+            return target;
+        }
+
+        /// <summary>
+        /// Mette un oggetto al posto di un altro nell'elenco degli oggetti del file
+        /// </summary>
+        private static void ReplaceObject(IgzFile igz, igObject oldObject, igObject newObject)
+        {
+            int index = igz.Objects.IndexOf(oldObject);
+            if (index >= 0) igz.Objects[index] = newObject;
+            else igz.Objects.Add(newObject);
+        }
+
         /// <summary>
         /// Percorso (minuscolo) del modello indicato nei dati di un'entita' ("Levels\Crash1\crates\Crash_Crate_Nitro" ->
         /// models/levels/crash1/crates/crash_crate_nitro.igz); null se vuoto
         /// </summary>
-        private static string? ModelPathFromName(string? name)
+        private static string? ModelPathFromName(string? name, string folder = "models")
         {
             if (string.IsNullOrWhiteSpace(name)) return null;
             string p = name.Trim().Replace('\\', '/');
@@ -4594,7 +4748,7 @@ namespace NST
             if (colon >= 0) p = p.Substring(colon + 1);
             p = p.TrimStart('/');
             if (p.Length == 0) return null;
-            if (!p.StartsWith("models/", StringComparison.OrdinalIgnoreCase)) p = "models/" + p;
+            if (!p.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase)) p = folder + "/" + p;
             if (!p.EndsWith(".igz", StringComparison.OrdinalIgnoreCase)) p += ".igz";
             return p.ToLowerInvariant();
         }
