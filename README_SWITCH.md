@@ -57,6 +57,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--originale-switch <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
+        [--riflessi auto|si|no]
         [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -155,6 +156,15 @@ Dettagli:
   che ne ha di più; con il nome di un livello originale quelle di quel livello. Nel dump della
   versione 1.0.0 tutti i livelli hanno gli stessi valori (200 MB e 30 MB), quindi in pratica non
   cambia nulla.
+- `--riflessi auto|si|no` (con `--nuovo`, dalla v41): riflessi planari nella zone info
+  (`_planarReflectionsEnabled`). Il ghiaccio che riflette dei livelli di neve di Crash 2 (Snow Go,
+  Cold Hard Crash, Bear It...) sulla Switch disegna il riflesso che il gioco calcola solo se la zone
+  info li accende: con quella di un livello senza riflessi (N. Sanity Beach) il ghiaccio resta nero e
+  sembra che non ci sia (Level 10: Crash scivola su un pavimento che non si vede). Con `auto`
+  (predefinito) si accendono se il livello ha i file dei riflessi di un altro livello
+  (`L202_SnowGo_Reflections.igz`, che l'editor copia insieme al ghiaccio) o se erano accesi nella
+  zone info dell'editor; altrimenti restano come nell'originale. `si` e `no` li forzano. Il rapporto
+  lo dice nella registrazione e mostra il valore delle zone info (`riflessi planari`).
 - `--salvataggio` (con `--nuovo`): `proprio` (predefinito) dà al livello una voce di
   salvataggio sua, con il suo nome; `originale` usa quella del livello da cui viene la zone
   info (gemme, casse e tempi finiscono su quel livello).
@@ -227,6 +237,11 @@ Dettagli:
   11 si carica solo togliendo i nemici di Under Pressure e le corsie e i nemici di Orient Express e
   Midnight Run. Le decorazioni restano. Il rapporto le elenca in `FILE DI ALTRI LIVELLI CAMBIATI`
   (righe `modalita'`); `--tieni-entita-modalita` le lascia tutte.
+  Dalla v41 si tolgono anche le entità che bloccano il caricamento pur essendo di un livello
+  normale, trovate con le prove: per ora i pinguini fermi di Snow Go
+  (`Arctic_Enemy_Immobile_Penguin`, con quelli Level 10 resta su LOADING; foche e altri pinguini
+  restano). Righe `blocca il caricamento` nel rapporto; anche queste restano con
+  `--tieni-entita-modalita`.
 - Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
   materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
   nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi

@@ -97,6 +97,9 @@ namespace NST
             // converti: non togliere le entita' con un comportamento prese da livelli con una modalita' che il livello
             // non ha (sub, tigre, orso, moto d'acqua...) e dai boss (dalla v39 si tolgono da sole)
             public bool KeepModeEntities;
+            // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
+            // ghiaccio che riflette, come Snow Go; "si"; "no")
+            public string Reflections = "auto";
             // Errori nella riga di comando (opzioni sconosciute, valori mancanti o non validi)
             public List<string> Errors = [];
         }
@@ -106,6 +109,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
+            "--riflessi",
         ];
 
         public static int Run(string[] args)
@@ -200,6 +204,7 @@ namespace NST
                 else if (name == "--senza-modalita") { options.WithoutMode = true; rest.RemoveAt(i); }
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
+                else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
@@ -213,6 +218,8 @@ namespace NST
 
             if (options.RegisterIn != "update" && options.RegisterIn != "chunkinfos")
                 options.Errors.Add($"--registra-in {options.RegisterIn}: valori possibili update, chunkinfos");
+            if (options.Reflections != "auto" && options.Reflections != "si" && options.Reflections != "no")
+                options.Errors.Add($"--riflessi {options.Reflections}: valori possibili auto, si, no");
             if (options.SaveMode != "proprio" && options.SaveMode != "originale")
                 options.Errors.Add($"--salvataggio {options.SaveMode}: valori possibili proprio, originale");
             string igzMode = options.IgzMode.ToLowerInvariant();
@@ -228,7 +235,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2469,6 +2476,25 @@ namespace NST
                                 }
                             }
 
+                            // Entita' che bloccano il caricamento anche quando il livello ha la loro modalita', trovate con le prove
+                            // (vedi _knownBlockingEntities). Solo nei file nel pacchetto; --tieni-entita-modalita le lascia
+                            if (inPcPackage && !options.KeepModeEntities)
+                            {
+                                var blocking = new Dictionary<igObject, string>();
+                                foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
+                                    if (KnownBlockingEntity(candidate, Refs(candidate)) is string description) blocking[candidate] = description;
+                                if (blocking.Count > 0)
+                                {
+                                    string names = string.Join(", ", blocking.Keys.Take(12).Select(e => e.ObjectName ?? "?")) + (blocking.Count > 12 ? $" e altre {blocking.Count - 12}" : "");
+                                    string reasons = string.Join(", ", blocking.Values.Distinct());
+                                    HashSet<igObject> removedObjects = igz.Remove(blocking.Keys.ToHashSet());
+                                    modified = true;
+                                    counters["entita' che bloccano il caricamento tolte"] =
+                                        counters.GetValueOrDefault("entita' che bloccano il caricamento tolte") + blocking.Count;
+                                    removedEntities.Add($"  blocca il caricamento, {path}: {blocking.Count} entita' ({removedObjects.Count} oggetti, {reasons}): {names}");
+                                }
+                            }
+
                             if (options.OnlyUsed && inPcPackage)
                             {
                                 // Decorazioni (solo modello e collisione) che usano modelli che la Switch non ha: sulla Switch non si
@@ -3003,11 +3029,24 @@ namespace NST
                 EGameYear? forcedYear = options.Game == null ? null : LevelBuilder.GetGameYear(options.Game);
                 if (zoneTemplate == null && (forcedYear != null || poolSource != null))
                     report.AppendLine("  ATTENZIONE: con --zoneinfo-da pc --gioco e --memoria non si applicano (cambiano solo la zone info presa da un originale)");
+                // Riflessi planari: il ghiaccio che riflette (Snow Go, Cold Hard Crash...) sulla Switch disegna il riflesso che il
+                // gioco calcola solo se la zone info li accende; spenti (N. Sanity Beach) il ghiaccio resta nero e sembra che
+                // non ci sia. Con "auto" si accendono se il livello ha i file dei riflessi di un altro livello (..._Reflections.igz)
+                List<string> reflectionFiles = output.Files
+                    .Where(f => f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) && f.Path.EndsWith("_reflections.igz", StringComparison.OrdinalIgnoreCase))
+                    .Select(f => NamespaceUtils.GetFileName(f.Path)).ToList();
+                bool? planarReflections = null;
+                if (options.Reflections == "si") planarReflections = true;
+                else if (options.Reflections == "no") planarReflections = false;
+                else if (reflectionFiles.Count > 0) planarReflections = true;
+                string reflectionsReason = options.Reflections != "auto" ? $"--riflessi {options.Reflections}"
+                    : reflectionFiles.Count > 0 ? $"il livello ha {string.Join(", ", reflectionFiles.Take(3))}" : "";
                 bool registered;
                 try
                 {
                     registered = BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
-                                                   options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode);
+                                                   options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode,
+                                                   planarReflections, reflectionsReason);
                 }
                 catch (Exception registrationError)
                 {
@@ -3262,7 +3301,8 @@ namespace NST
                                               List<(string path, byte[] data)> embedded, LevelRename? rename,
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
                                               bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
-                                              CZoneInfo? poolSource, string? poolFrom, bool editorMode)
+                                              CZoneInfo? poolSource, string? poolFrom, bool editorMode,
+                                              bool? planarReflections, string reflectionsReason)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -3396,6 +3436,25 @@ namespace NST
                 // info e, quando premi Play, crea i dati del personaggio che la attivano. Si fa lo stesso qui
                 if (editorMode && pcZoneInfo != null)
                     ApplyEditorMode(zoneInfo, pcZoneInfo, levelId, sw, update, embedded, report);
+
+                // Riflessi planari (vedi --riflessi): accesi anche se lo erano nella zone info dell'editor
+                bool? reflections = planarReflections;
+                if (reflections == null && pcZoneInfo != null && pcZoneInfo._planarReflectionsEnabled)
+                {
+                    reflections = true;
+                    reflectionsReason = "accesi nella zone info dell'editor";
+                }
+                if (reflections != null && reflections.Value != zoneInfo._planarReflectionsEnabled)
+                {
+                    zoneInfo._planarReflectionsEnabled = reflections.Value;
+                    report.AppendLine($"  riflessi planari {(reflections.Value ? "accesi" : "spenti")} ({reflectionsReason}): " +
+                                      (reflections.Value ? "il ghiaccio che riflette si vede" : "come chiesto"));
+                }
+                else
+                {
+                    report.AppendLine($"  riflessi planari: {(zoneInfo._planarReflectionsEnabled ? "accesi" : "spenti")}, come nell'originale" +
+                                      (reflectionsReason.Length > 0 ? $" ({reflectionsReason})" : ""));
+                }
 
                 // Zone info di Crash 3 presa da un livello originale con l'intro accesa: Crash non compariva (Oichi, v24);
                 // spenta, Crash compare e l'intro del livello (Crash che esce dal portale) parte lo stesso (v25)
@@ -4332,6 +4391,25 @@ namespace NST
             return (level, modes);
         }
 
+        /// <summary>
+        /// Entita' di altri livelli che, trovate con le prove, tengono il gioco su LOADING anche in un livello con la loro
+        /// modalita': testo nel nome (o nei file che usa) e descrizione per il rapporto
+        /// </summary>
+        private static readonly (string fragment, string description)[] _knownBlockingEntities =
+        [
+            // Level 10 (v40): si carica solo togliendo i pinguini fermi di Snow Go (le foche e gli altri pinguini restano)
+            ("arctic_enemy_immobile_penguin", "pinguini fermi di Snow Go"),
+        ];
+
+        private static string? KnownBlockingEntity(igEntity entity, HashSet<string> references)
+        {
+            string name = entity.ObjectName ?? "";
+            foreach (var (fragment, description) in _knownBlockingEntities)
+                if (name.Contains(fragment, StringComparison.OrdinalIgnoreCase) ||
+                    references.Any(r => r.Contains(fragment, StringComparison.OrdinalIgnoreCase))) return description;
+            return null;
+        }
+
         private static string ModeDescription(string mode) => mode switch
         {
             "swim" => "sub",
@@ -4353,7 +4431,8 @@ namespace NST
             return $"nome '{zone._name}', anno {zone._year}, build '{zone._build}', personaggio '{zone._overrideCharacter}', " +
                    $"veicolo '{zone._zoneVehicle}', intro {zone._flags._magicMomentIntro}, boss {zone._flags._isBoss}, menu {zone._flags._isMenu}, " +
                    $"salvataggio '{zone._saveName}', caricamento '{zone._loadScreenName}'/'{zone._loadMovieName}', " +
-                   $"memoria livello {Mb(zone._levelPoolSize?._size ?? 0)}, globale {Mb(zone._globalChunkPoolSize?._size ?? 0)}";
+                   $"memoria livello {Mb(zone._levelPoolSize?._size ?? 0)}, globale {Mb(zone._globalChunkPoolSize?._size ?? 0)}, " +
+                   $"riflessi planari {(zone._planarReflectionsEnabled ? "si'" : "no")}";
         }
 
         /// <summary>
