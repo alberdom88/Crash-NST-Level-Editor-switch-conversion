@@ -252,7 +252,8 @@ Dettagli:
   di neve e ghiaccio di Cold Hard Crash usano modelli che stanno nell'archivio di Snow Biz e nel
   livello non c'erano. Sulla Switch quelle decorazioni non si vedevano, ma la loro collisione sì
   (Level 10: Crash cammina e scivola su un pavimento che non si vede). Dalla v46 quei modelli si
-  copiano dall'archivio Switch che li ha, con i loro materiali e le loro texture. La
+  copiano dall'archivio Switch che li ha, con i loro materiali e le loro texture (nel Level 10
+  c'erano già tutti: il pavimento nero dipende dai materiali, vedi più sotto). La
   sezione `MODELLI DELLE ENTITA' INDICATI PER NOME` li elenca tutti con dove stanno (nell'archivio,
   negli archivi comuni, solo nell'archivio di un altro livello, da nessuna parte); quelli che sulla
   Switch stanno solo nell'archivio di un altro livello vengono copiati, con le loro dipendenze.
@@ -281,14 +282,47 @@ Dettagli:
   già convertiti e non se ne trovava nessuna. Dalla v45 si cerca nei file del PC (come li legge
   l'editor), solo tra quelle il cui modello c'è sulla Switch, e la copia si fa mentre si converte il
   file dei blocchi. Se non ne trova, il rapporto dice quante entità ha guardato e perché le ha
-  scartate.
+  scartate. Le copie restavano nere come il pavimento: il problema erano i materiali (v47), quindi
+  di solito non serve.
 - Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
   materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
   nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi
   che il PC non conosce (il ciclo delle dipendenze li saltava). Quelli che mancano si aggiungono
   dall'archivio Switch del file che li usa, o da un altro archivio che li ha: sezione `DIPENDENZE
-  DELLA GRAFICA AGGIUNTE ALLA FINE`. Senza, quella grafica resta senza materiale o senza texture
-  (è il primo sospetto per il pavimento nero del Level 10, su cui Crash cammina senza vederlo).
+  DELLA GRAFICA AGGIUNTE ALLA FINE`. Senza, quella grafica resta senza materiale o senza texture.
+  Questo controllo guarda i nomi dei file: non vede i materiali nominati come insieme::materiale
+  (punto seguente).
+- Materiali nominati come insieme::materiale (dalla v47): i file dei materiali si chiamano
+  `insieme,materiale,opzioni` (per esempio `C2_Snow_materials,C2_Snow_IslandIce01,000201004000`:
+  il materiale `C2_Snow_IslandIce01` dell'insieme `C2_Snow_materials`, compilato con le opzioni
+  del motore scritte dopo l'ultima virgola), ma modelli e decorazioni li nominano come
+  `insieme::materiale` (per nome o per hash), senza le opzioni. L'editor lo sa e quando copia
+  prende tutti i materiali dell'insieme; il convertitore fino alla v46 guardava solo i nomi dei
+  file, quindi `--solo-usati` toglieva come non usati anche i materiali usati così (nel Level 10 ne
+  toglieva più di 200, tra cui quelli del ghiaccio, dei pavimenti di neve e dei blocchi
+  `Design_Core`) e un materiale che sulla Switch ha altre opzioni, cioè un altro nome di file,
+  veniva saltato (righe `SALTATO (grafica PC, ...)`: per esempio i materiali dei terreni di Snow
+  Go e Cold Hard Crash). Senza il suo materiale la grafica è nera: è il sospetto principale per il
+  pavimento nero del Level 10.
+  Dalla v47:
+  - `--solo-usati` conta anche questi riferimenti (le opzioni non contano: tiene tutti i file di
+    quel materiale);
+  - alla fine, per ogni insieme::materiale usato da un file dell'archivio (modelli, decorazioni,
+    personaggi, effetti) che non è nell'archivio né negli archivi comuni, si prendono dalla Switch
+    tutti i file di quel materiale, anche con altre opzioni, dall'archivio del file che lo usa (o
+    da un altro che li ha), con le loro texture;
+  - nelle decorazioni convertite dal PC, le sostituzioni dei materiali (`CFxMaterialRedirectTable`
+    nei componenti delle decorazioni: per esempio i pavimenti dei livelli di neve, che prendono il
+    materiale del terreno) che portano a un materiale che la Switch non ha si fanno come
+    nell'originale Switch dello stesso file (stessa entità, o lo stesso materiale di partenza); se
+    non si può, la sostituzione si toglie e la decorazione resta con il materiale del suo modello;
+  - il file dell'insieme (`insieme.igz`), di cui la Switch ha una versione per archivio, si prende
+    dalla versione che contiene più materiali usati, se quella nell'archivio non li ha tutti.
+
+  La sezione `MATERIALI USATI PER INSIEME::MATERIALE` dice quanti riferimenti ci sono, quali
+  materiali sono stati aggiunti, quali la Switch non ha (con il nome che hanno sul PC e gli
+  insiemi in cui la Switch ha un materiale con lo stesso nome), quanti materiali usati contiene
+  ogni insieme e le sostituzioni (quante, le più frequenti e cosa è stato fatto).
 - Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
   controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
   hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non
@@ -310,7 +344,8 @@ Dettagli:
   I file di altri livelli fuori dal pacchetto non si toccano. Poi toglie dall'archivio modelli,
   materiali e texture che nessun file del livello usa più (i file usati si leggono da tutti i
   riferimenti e da tutti i testi degli igz, compresi i percorsi dei modelli; dalla v40 anche i
-  riferimenti per hash con nomi che il PC non conosce, che prima non contavano). Il rapporto elenca
+  riferimenti per hash con nomi che il PC non conosce, che prima non contavano; dalla v47 anche i
+  materiali nominati come insieme::materiale, vedi sopra). Il rapporto elenca
   le entità tolte (`FILE DI ALTRI LIVELLI CAMBIATI`) e la grafica tolta (`GRAFICA NON USATA`: le
   20 più grandi, e tutte in fondo al rapporto nelle righe `grafica non usata`).
   Un file da cui si tolgono tutte le entità resta fuori dall'archivio e dal pacchetto: fino alla

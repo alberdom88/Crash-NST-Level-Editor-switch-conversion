@@ -3024,6 +3024,22 @@ namespace NST
                 foreach (IgArchiveFile removed in RemoveUnusedFiles(output, report, lines)) included.Remove(removed.Path.ToLowerInvariant());
             }
 
+            // Materiali nominati come insieme::materiale (modelli, decorazioni e loro sostituzioni dei materiali): quelli che
+            // mancano presi dalla Switch anche con altre opzioni, le sostituzioni verso materiali che la Switch non ha fatte come
+            // nell'originale Switch o tolte, il file dell'insieme dalla versione che ha i materiali usati (vedi FixMaterials).
+            // Prima delle dipendenze della grafica qui sotto, che aggiungono le texture dei materiali aggiunti
+            Console.WriteLine("Controllo i materiali...");
+            List<string> materialReport;
+            try
+            {
+                materialReport = FixMaterials(output, sw, pc, fromSwitch, AddOriginal, lines);
+            }
+            catch (Exception e)
+            {
+                materialReport = ["=== MATERIALI USATI PER INSIEME::MATERIALE ===", $"  ERRORE nel controllo dei materiali: {e.GetType().Name}: {e.Message}", ""];
+                lines.Add($"ERRORE controllo dei materiali: {e}");
+            }
+
             // Dipendenze della grafica presa dagli originali Switch (modelli e materiali: i loro materiali e le loro texture)
             // che non sono nell'archivio ne' negli archivi comuni del gioco, comprese quelle indicate per hash (EXID) con
             // nomi che il PC non conosce, che il ciclo delle dipendenze non riconosceva: senza, la grafica resta senza
@@ -3355,6 +3371,7 @@ namespace NST
             foreach (string line in graphicsDependencies.Take(80)) report.AppendLine(line);
             if (graphicsDependencies.Count > 80) report.AppendLine($"  ... e altre {graphicsDependencies.Count - 80}");
             report.AppendLine();
+            foreach (string line in materialReport) report.AppendLine(line);
             if (unreadableFiles.Count > 0)
             {
                 report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
@@ -4239,11 +4256,112 @@ namespace NST
         }
 
         /// <summary>
+        /// Materiali (cartelle materialinstances/): "insieme,materiale,opzioni.igz" e' un materiale dell'insieme compilato con
+        /// le opzioni del motore (dopo l'ultima virgola), "insieme.igz" il file dell'insieme. Modelli e decorazioni nominano il
+        /// materiale come insieme::materiale (per nome o per hash), non con il nome del file: per questo l'editor, quando
+        /// copia, prende tutti i file dell'insieme. Qui: file per (insieme, materiale), file degli insiemi, nomi dagli hash
+        /// </summary>
+        private sealed class MaterialIndex
+        {
+            public readonly Dictionary<(string set, string material), List<IgArchiveFile>> Instances = new();
+            public readonly Dictionary<string, List<IgArchiveFile>> SetFiles = new();
+            private readonly Dictionary<uint, string> _setByHash = new();
+            private readonly Dictionary<(uint set, uint material), string> _materialByHash = new();
+            private readonly Dictionary<uint, (string set, string material)> _instanceByHash = new();
+
+            public static bool InMaterialFolder(string path) =>
+                path.Replace('\\', '/').Contains("materialinstances/", StringComparison.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// Insieme e materiale (in minuscolo) di un nome "insieme,materiale,opzioni"; null per gli altri nomi
+            /// </summary>
+            public static (string set, string material)? Split(string name)
+            {
+                int first = name.IndexOf(','), last = name.LastIndexOf(',');
+                if (first <= 0 || last <= first + 1) return null;
+                return (name.Substring(0, first).ToLowerInvariant(), name.Substring(first + 1, last - first - 1).ToLowerInvariant());
+            }
+
+            public void Add(IgArchiveFile file)
+            {
+                if (!file.IsIGZ() || !InMaterialFolder(file.Path)) return;
+                string name = NamespaceUtils.GetFileName(file.Path, false);
+                (string set, string material)? split = Split(name);
+                if (split != null)
+                {
+                    (string set, string material) key = split.Value;
+                    if (!Instances.TryGetValue(key, out List<IgArchiveFile>? list)) Instances[key] = list = [];
+                    list.Add(file);
+                    uint setHash = NamespaceUtils.ComputeHash(key.set);
+                    _setByHash.TryAdd(setHash, key.set);
+                    _materialByHash.TryAdd((setHash, NamespaceUtils.ComputeHash(key.material)), key.material);
+                    _instanceByHash.TryAdd(NamespaceUtils.ComputeHash(name), key);
+                }
+                else if (!name.Contains(','))
+                {
+                    string set = name.ToLowerInvariant();
+                    if (!SetFiles.TryGetValue(set, out List<IgArchiveFile>? list)) SetFiles[set] = list = [];
+                    list.Add(file);
+                    _setByHash.TryAdd(NamespaceUtils.ComputeHash(set), set);
+                }
+            }
+
+            public void AddRange(IEnumerable<IgArchiveFile> files)
+            {
+                foreach (IgArchiveFile file in files) Add(file);
+            }
+
+            /// <summary>
+            /// Insieme di materiali nominato da un riferimento (nome o hash), null se non e' un insieme conosciuto
+            /// </summary>
+            public string? SetOf(string? ns)
+            {
+                if (string.IsNullOrEmpty(ns)) return null;
+                string lower = ns.ToLowerInvariant();
+                uint hash;
+                if (lower.All(char.IsDigit))
+                {
+                    if (!uint.TryParse(lower, out hash)) return null;
+                }
+                else
+                {
+                    if (lower.Contains(',')) return null;
+                    hash = NamespaceUtils.ComputeHash(lower);
+                }
+                return _setByHash.GetValueOrDefault(hash);
+            }
+
+            /// <summary>
+            /// Materiale (in minuscolo) di un riferimento a un insieme: il nome stesso, oppure, per un hash, il materiale
+            /// dell'insieme con quell'hash (null se non si conosce)
+            /// </summary>
+            public string? MaterialOf(string set, string? obj)
+            {
+                if (string.IsNullOrEmpty(obj)) return null;
+                string lower = obj.ToLowerInvariant();
+                if (!lower.All(char.IsDigit)) return lower;
+                return uint.TryParse(lower, out uint hash) ? _materialByHash.GetValueOrDefault((NamespaceUtils.ComputeHash(set), hash)) : null;
+            }
+
+            /// <summary>
+            /// Insieme e materiale di un hash del nome di un file "insieme,materiale,opzioni" (riferimento al file per hash)
+            /// </summary>
+            public (string set, string material)? InstanceOfHash(string? ns)
+            {
+                if (string.IsNullOrEmpty(ns) || !ns.All(char.IsDigit) || !uint.TryParse(ns, out uint hash)) return null;
+                if (_instanceByHash.TryGetValue(hash, out (string set, string material) key)) return key;
+                return null;
+            }
+        }
+
+        /// <summary>
         /// --solo-usati: toglie dall'archivio modelli, materiali e texture (igz in models/, materialinstances/, textures/,
         /// loosetextures/) che nessun altro file del livello usa. I file usati si leggono dai fixup di ogni igz (dipendenze,
         /// riferimenti per nome e tutti i testi, compresi quelli dentro liste e memorie, come i percorsi dei modelli), senza
         /// leggere gli oggetti: anche un file che l'editor non sa rileggere conta. Tutti gli altri file, compresi quelli di
         /// altri livelli, restano e fanno da punto di partenza. Il pacchetto non conta come uso (si ricostruisce dopo).
+        /// I materiali nominati come insieme::materiale (vedi MaterialIndex) usano i file "insieme,materiale,*": fino alla v46
+        /// non contavano e si toglievano (la grafica che li usa restava nera)
         /// </summary>
         private static List<IgArchiveFile> RemoveUnusedFiles(IgArchive output, StringBuilder report, List<string> lines)
         {
@@ -4269,33 +4387,63 @@ namespace NST
             var byHash = new Dictionary<uint, string>();
             foreach (string name in byName.Keys) byHash.TryAdd(NamespaceUtils.ComputeHash(name), name);
 
-            var deps = new Dictionary<IgArchiveFile, HashSet<string>>();
+            // materiali per insieme::materiale: i file di quel materiale, o tutti quelli dell'insieme se l'hash del materiale
+            // non si riconosce
+            var materials = new MaterialIndex();
+            materials.AddRange(files);
+            var setMembers = new Dictionary<string, List<IgArchiveFile>>();
+            foreach (var (key, instances) in materials.Instances)
+            {
+                if (!setMembers.TryGetValue(key.set, out List<IgArchiveFile>? members)) setMembers[key.set] = members = [];
+                members.AddRange(instances);
+            }
+
+            var deps = new Dictionary<IgArchiveFile, (HashSet<string> names, List<(string ns, string obj)> pairs)>();
             foreach (IgArchiveFile file in files.Where(x => x.IsIGZ() && !x.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase) &&
                                                             !x.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase)))
             {
-                HashSet<string>? names = RawReferencedNames(file);
-                if (names == null)
+                (HashSet<string> names, List<(string ns, string obj)> pairs)? references = RawReferences(file);
+                if (references == null)
                 {
                     report.AppendLine($"--solo-usati: {file.Path} non leggibile: non tolgo nessun file");
                     report.AppendLine();
                     return [];
                 }
-                deps[file] = names;
+                deps[file] = references.Value;
             }
 
             var reached = new HashSet<IgArchiveFile>(files.Where(x => !Removable(x)));
             var queue = new Queue<IgArchiveFile>(reached);
+            void Reach(IgArchiveFile target)
+            {
+                if (reached.Add(target)) queue.Enqueue(target);
+            }
+            int materialReferences = 0;
             while (queue.Count > 0)
             {
                 IgArchiveFile file = queue.Dequeue();
-                if (!deps.TryGetValue(file, out HashSet<string>? names)) continue;
-                foreach (string referenced in names)
+                if (!deps.TryGetValue(file, out var references)) continue;
+                foreach (string referenced in references.names)
                 {
                     string name = referenced;
                     if (name.All(char.IsDigit) && uint.TryParse(name, out uint hash) && byHash.TryGetValue(hash, out string? resolved)) name = resolved;
                     if (byName.TryGetValue(name, out List<IgArchiveFile>? targets))
-                        foreach (IgArchiveFile target in targets)
-                            if (reached.Add(target)) queue.Enqueue(target);
+                        foreach (IgArchiveFile target in targets) Reach(target);
+                }
+                foreach (var (ns, obj) in references.pairs)
+                {
+                    string? set = materials.SetOf(ns);
+                    if (set == null) continue;
+                    materialReferences++;
+                    string? material = materials.MaterialOf(set, obj);
+                    if (material == null)
+                    {
+                        foreach (IgArchiveFile target in setMembers.GetValueOrDefault(set) ?? []) Reach(target);
+                    }
+                    else if (materials.Instances.TryGetValue((set, material), out List<IgArchiveFile>? instances))
+                    {
+                        foreach (IgArchiveFile target in instances) Reach(target);
+                    }
                 }
             }
 
@@ -4304,6 +4452,7 @@ namespace NST
             foreach (IgArchiveFile file in unused) output.RemoveFile(file);
             report.AppendLine("=== GRAFICA NON USATA (--solo-usati) ===");
             report.AppendLine($"tolti {unused.Count} file ({Mb((ulong)bytes)}) di modelli, materiali e texture che nessun file del livello usa");
+            report.AppendLine($"(materiali nominati come insieme::materiale riconosciuti: {materialReferences} riferimenti; fino alla v46 non contavano)");
             foreach (IgArchiveFile file in unused.OrderByDescending(x => x.UncompressedSize).Take(20))
                 report.AppendLine($"  {Mb((ulong)file.UncompressedSize),10}  {file.Path}");
             if (unused.Count > 20) report.AppendLine($"  ... e altri {unused.Count - 20} (tutti in fondo al rapporto, righe \"grafica non usata\")");
@@ -4313,11 +4462,11 @@ namespace NST
         }
 
         /// <summary>
-        /// Nomi (in minuscolo, senza cartella ne' estensione) di tutto quello che un igz nomina: dipendenze (TDEP), riferimenti
-        /// per nome a oggetti di altri file (EXNM, EXID) e tutti i testi (TSTR). Letti dai fixup, senza leggere gli oggetti.
-        /// null se il file non si legge
+        /// Tutto quello che un igz nomina, letto dai fixup senza leggere gli oggetti: i nomi (in minuscolo, senza cartella ne'
+        /// estensione) delle dipendenze (TDEP), dei riferimenti per nome (EXNM, EXID) e di tutti i testi (TSTR), e le coppie
+        /// spazio dei nomi::oggetto dei riferimenti (per i materiali nominati come insieme::materiale). null se il file non si legge
         /// </summary>
-        private static HashSet<string>? RawReferencedNames(IgArchiveFile file)
+        private static (HashSet<string> names, List<(string ns, string obj)> pairs)? RawReferences(IgArchiveFile file)
         {
             // un file che non e' un igz (per esempio un .lng di testo) non nomina altri file
             byte[] data;
@@ -4329,10 +4478,11 @@ namespace NST
             {
                 return null;
             }
-            if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return new HashSet<string>();
+            var names = new HashSet<string>();
+            var pairs = new List<(string ns, string obj)>();
+            if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return (names, pairs);
             FixupCollection? fixups = RawFixups(file);
             if (fixups == null) return null;
-            var names = new HashSet<string>();
             void Add(string? value)
             {
                 if (string.IsNullOrEmpty(value)) return;
@@ -4345,9 +4495,514 @@ namespace NST
                 Add(item.path);
             }
             foreach (string text in fixups.TSTR) Add(text);
+            // i riferimenti del file a se stesso (il suo spazio dei nomi, per nome o per hash) non sono coppie che usa
+            string ownName = NamespaceUtils.GetFileName(file.Path, false);
+            string ownHash = NamespaceUtils.ComputeHash(ownName).ToString();
             foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+            {
                 Add(reference.namespaceName);
-            return names;
+                if (string.IsNullOrEmpty(reference.namespaceName) || string.IsNullOrEmpty(reference.objectName)) continue;
+                if (reference.namespaceName.Equals(ownName, StringComparison.OrdinalIgnoreCase) || reference.namespaceName == ownHash) continue;
+                pairs.Add((reference.namespaceName, reference.objectName));
+            }
+            return (names, pairs);
+        }
+
+        /// <summary>
+        /// Archivio Switch del livello di un file di posizionamento (maps/Crash2/L218_ColdHardCrash/... -> l218_coldhardcrash),
+        /// null se il dump non ce l'ha
+        /// </summary>
+        private static string? MapLevelArchive(string path, ArchiveIndex sw)
+        {
+            string lower = path.Replace('\\', '/').ToLowerInvariant();
+            if (!lower.StartsWith("maps/")) return null;
+            int slash = lower.LastIndexOf('/');
+            int previous = slash > 0 ? lower.LastIndexOf('/', slash - 1) : -1;
+            if (previous < 0) return null;
+            string folder = lower.Substring(previous + 1, slash - previous - 1);
+            return sw.ByArchive.ContainsKey(folder) ? folder : null;
+        }
+
+        /// <summary>
+        /// Nomi (in minuscolo) e hash dei nomi degli oggetti di un igz; null se non si legge
+        /// </summary>
+        private static (HashSet<string> names, HashSet<uint> hashes)? ObjectNameSet(IgArchiveFile file)
+        {
+            try
+            {
+                var names = new HashSet<string>();
+                var hashes = new HashSet<uint>();
+                foreach (igObject obj in file.ToIgzFile().Objects)
+                {
+                    if (string.IsNullOrEmpty(obj.ObjectName)) continue;
+                    names.Add(obj.ObjectName.ToLowerInvariant());
+                    hashes.Add(NamespaceUtils.ComputeHash(obj.ObjectName));
+                }
+                return (names, hashes);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Materiali nominati come insieme::materiale (vedi MaterialIndex) da modelli, decorazioni, personaggi ed effetti,
+        /// comprese le tabelle di sostituzione dei materiali delle decorazioni (CFxMaterialRedirectTable):
+        ///  - quelli che non sono nell'archivio ne' negli archivi comuni si prendono dalla Switch: stesso insieme e materiale,
+        ///    anche con altre opzioni (sul PC il file puo' avere un altro nome, e veniva saltato), dall'archivio del file che
+        ///    li usa se ce l'ha;
+        ///  - nelle decorazioni convertite dal PC, una sostituzione verso un materiale che la Switch non ha si fa come
+        ///    nell'originale Switch dello stesso file (stessa entita', o stesso materiale di partenza), oppure si toglie: la
+        ///    decorazione resta con il materiale del suo modello invece di uno che non c'e' (nera);
+        ///  - il file dell'insieme (insieme.igz: sulla Switch ce n'e' uno per archivio, il convertitore prende il primo) si
+        ///    prende dalla versione che contiene piu' materiali usati, se quella nell'archivio non li ha tutti.
+        /// Restituisce le righe del rapporto
+        /// </summary>
+        private static List<string> FixMaterials(IgArchive output, ArchiveIndex sw, IgArchive pc, List<IgArchiveFile> fromSwitch,
+                                                 Action<IgArchiveFile, string> addOriginal, List<string> lines)
+        {
+            var levelArchiveSet = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
+                .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
+
+            // Materiali della Switch (tutti gli archivi), degli archivi comuni (il gioco li ha sempre), del PC e dell'archivio
+            var switchMaterials = new MaterialIndex();
+            var commonKeys = new HashSet<(string set, string material)>();
+            var commonSets = new HashSet<string>();
+            foreach (var (archiveName, archiveFiles) in sw.ByArchive)
+            {
+                bool common = !levelArchiveSet.Contains(archiveName);
+                foreach (IgArchiveFile file in archiveFiles)
+                {
+                    if (!file.IsIGZ() || !MaterialIndex.InMaterialFolder(file.Path)) continue;
+                    switchMaterials.Add(file);
+                    if (!common) continue;
+                    string name = NamespaceUtils.GetFileName(file.Path, false);
+                    (string set, string material)? split = MaterialIndex.Split(name);
+                    if (split != null) commonKeys.Add(split.Value);
+                    else if (!name.Contains(',')) commonSets.Add(name.ToLowerInvariant());
+                }
+            }
+            var pcMaterials = new MaterialIndex();
+            pcMaterials.AddRange(pc.Files);
+            var outputMaterials = new MaterialIndex();
+            outputMaterials.AddRange(output.Files.Where(f => !f.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)));
+            bool Present((string set, string material) key) => outputMaterials.Instances.ContainsKey(key) || commonKeys.Contains(key);
+
+            // (insieme, materiale) di un riferimento: insieme::materiale (nomi o hash) oppure il nome del file
+            // "insieme,materiale,opzioni" (nome o hash); null se non e' un materiale
+            (string set, string material, bool fileName)? Resolve(NamedReference? reference)
+            {
+                if (reference == null || string.IsNullOrEmpty(reference.namespaceName) || string.IsNullOrEmpty(reference.objectName)) return null;
+                string ns = reference.namespaceName;
+                if (ns.Contains(','))
+                {
+                    (string set, string material)? split = MaterialIndex.Split(ns);
+                    // anche texture e suoni hanno virgole nel nome: conta solo un insieme di materiali conosciuto
+                    if (split == null) return null;
+                    if ((switchMaterials.SetOf(split.Value.set) ?? outputMaterials.SetOf(split.Value.set) ?? pcMaterials.SetOf(split.Value.set)) == null) return null;
+                    return (split.Value.set, split.Value.material, true);
+                }
+                string? materialSet = switchMaterials.SetOf(ns) ?? outputMaterials.SetOf(ns) ?? pcMaterials.SetOf(ns);
+                if (materialSet == null)
+                {
+                    (string set, string material)? byHash = switchMaterials.InstanceOfHash(ns) ?? outputMaterials.InstanceOfHash(ns) ??
+                                                            pcMaterials.InstanceOfHash(ns);
+                    if (byHash == null) return null;
+                    return (byHash.Value.set, byHash.Value.material, true);
+                }
+                string? materialName = switchMaterials.MaterialOf(materialSet, reference.objectName) ??
+                                       outputMaterials.MaterialOf(materialSet, reference.objectName) ??
+                                       pcMaterials.MaterialOf(materialSet, reference.objectName);
+                if (materialName == null) return null;
+                return (materialSet, materialName, false);
+            }
+
+            var archiveOfPath = new Dictionary<string, string>();
+            foreach (IgArchiveFile original in fromSwitch)
+                if (sw.ArchiveOf.TryGetValue(original, out string? originalArchive)) archiveOfPath.TryAdd(original.Path.ToLowerInvariant(), originalArchive);
+
+            // Riferimenti ai materiali di tutti i file dell'archivio (tranne texture e pacchetto)
+            var users = new Dictionary<(string set, string material), SortedSet<string>>();
+            var preferred = new Dictionary<(string set, string material), List<string>>();
+            int bySet = 0, byFileName = 0;
+            var userFiles = new HashSet<string>();
+            var modelExamples = new List<string>();
+            foreach (IgArchiveFile file in output.Files.ToList())
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!file.IsIGZ() || lower.StartsWith("update/") || lower.StartsWith("packages/") || lower.StartsWith("textures/") ||
+                    lower.StartsWith("loosetextures/")) continue;
+                FixupCollection? fixups = RawFixups(file);
+                if (fixups == null) continue;
+                string? archive = archiveOfPath.GetValueOrDefault(lower) ?? MapLevelArchive(lower, sw);
+                string ownName = NamespaceUtils.GetFileName(lower, false);
+                string ownHash = NamespaceUtils.ComputeHash(ownName).ToString();
+                (string set, string material)? own = MaterialIndex.InMaterialFolder(lower) ? MaterialIndex.Split(ownName) : null;
+                var examples = new List<string>();
+                foreach (NamedReference reference in fixups.handleReferences.Concat(fixups.objectReferences).Concat(fixups.exidReferences))
+                {
+                    // riferimenti del file a se stesso: non sono materiali che usa
+                    if (reference.namespaceName.Equals(ownName, StringComparison.OrdinalIgnoreCase) || reference.namespaceName == ownHash) continue;
+                    var resolved = Resolve(reference);
+                    if (resolved == null) continue;
+                    (string set, string material) key = (resolved.Value.set, resolved.Value.material);
+                    if (own != null && own.Value == key) continue;  // un materiale che nomina il suo insieme::materiale
+                    if (resolved.Value.fileName) byFileName++;
+                    else bySet++;
+                    if (!users.TryGetValue(key, out SortedSet<string>? usedBy)) users[key] = usedBy = new SortedSet<string>(StringComparer.Ordinal);
+                    usedBy.Add(NamespaceUtils.GetFileName(file.Path));
+                    userFiles.Add(lower);
+                    if (archive != null)
+                    {
+                        if (!preferred.TryGetValue(key, out List<string>? archives)) preferred[key] = archives = [];
+                        if (!archives.Contains(archive)) archives.Add(archive);
+                    }
+                    if (lower.StartsWith("models/") && examples.Count < 3) examples.Add(reference.ToString());
+                }
+                if (examples.Count > 0 && modelExamples.Count < 4) modelExamples.Add($"    {file.Path}: {string.Join(", ", examples)}");
+            }
+
+            // Quelli che mancano si prendono dalla Switch: tutte le versioni (opzioni) di quel materiale nell'archivio scelto
+            var added = new List<string>();
+            long addedBytes = 0;
+            string Who(SortedSet<string> usedBy) => string.Join(", ", usedBy.Take(3)) + (usedBy.Count > 3 ? $" e altri {usedBy.Count - 3}" : "");
+            bool AddFromSwitch((string set, string material) key, IEnumerable<string>? archives, string who)
+            {
+                if (!switchMaterials.Instances.TryGetValue(key, out List<IgArchiveFile>? candidates) || candidates.Count == 0) return false;
+                List<string> hints = archives?.ToList() ?? [];
+                string? archive = hints.FirstOrDefault(a => candidates.Any(c => sw.ArchiveOf.GetValueOrDefault(c) == a)) ??
+                                  candidates.Select(c => sw.ArchiveOf.GetValueOrDefault(c)).FirstOrDefault(a => a != null);
+                List<IgArchiveFile> chosen = candidates.Where(c => sw.ArchiveOf.GetValueOrDefault(c) == archive).ToList();
+                if (chosen.Count == 0) chosen = [candidates[0]];
+                foreach (IgArchiveFile candidate in chosen)
+                {
+                    int before = output.Files.Count;
+                    addOriginal(candidate, "materiali usati per insieme::materiale aggiunti dalla Switch");
+                    if (output.Files.Count == before) continue;
+                    outputMaterials.Add(candidate);
+                    addedBytes += candidate.UncompressedSize;
+                    added.Add($"    {candidate.Path} da {archive ?? "?"}.pak (usato da {who})");
+                    lines.Add($"materiale aggiunto (insieme::materiale): {candidate.Path} (usato da {who})");
+                }
+                return Present(key);
+            }
+
+            var missing = new List<(string set, string material)>();
+            int presentCount = 0;
+            foreach (var (key, usedBy) in users.OrderBy(e => e.Key.set, StringComparer.Ordinal).ThenBy(e => e.Key.material, StringComparer.Ordinal))
+            {
+                if (Present(key))
+                {
+                    presentCount++;
+                    continue;
+                }
+                if (!AddFromSwitch(key, preferred.GetValueOrDefault(key), Who(usedBy))) missing.Add(key);
+            }
+
+            // Tabelle di sostituzione dei materiali nelle decorazioni convertite dal PC: _default e coppie _keys -> _values
+            string KeyText(NamedReference? reference)
+            {
+                if (reference == null || reference.IsNullOrEmpty()) return "-";
+                var resolved = Resolve(reference);
+                return resolved != null
+                    ? $"{resolved.Value.set}::{resolved.Value.material}"
+                    : $"{reference.namespaceName}::{reference.objectName}".ToLowerInvariant();
+            }
+            // null: non e' un materiale riconosciuto (non si tocca); altrimenti se c'e' (nell'archivio o negli archivi comuni)
+            bool? Available(NamedReference? reference)
+            {
+                if (reference == null || reference.IsNullOrEmpty()) return null;
+                var resolved = Resolve(reference);
+                if (resolved == null) return null;
+                return Present((resolved.Value.set, resolved.Value.material));
+            }
+            // Un materiale che c'e' o che si puo' prendere dalla Switch
+            bool Usable(NamedReference? reference, string who)
+            {
+                if (reference == null || reference.IsNullOrEmpty()) return false;
+                var resolved = Resolve(reference);
+                if (resolved == null) return false;
+                (string set, string material) key = (resolved.Value.set, resolved.Value.material);
+                return Present(key) || AddFromSwitch(key, null, who);
+            }
+
+            var originalPaths = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
+            List<IgArchiveFile> convertedMaps = output.Files.Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) &&
+                                                                        !originalPaths.Contains(f.Path.ToLowerInvariant())).ToList();
+
+            // Dagli originali Switch dei file convertiti: la tabella di ogni entita' e, per ogni materiale di partenza, i
+            // materiali con cui la Switch lo sostituisce (e quante volte)
+            var originalTables = new Dictionary<string, Dictionary<string, CFxMaterialRedirectTable>>();
+            var originalValues = new Dictionary<string, Dictionary<string, (NamedReference reference, int count)>>();
+            foreach (IgArchiveFile file in convertedMaps)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!sw.ByPath.TryGetValue(lower, out IgArchiveFile? original)) continue;
+                IgzFile originalIgz;
+                try
+                {
+                    originalIgz = original.ToIgzFile();
+                }
+                catch
+                {
+                    continue;
+                }
+                var tablesByEntity = new Dictionary<string, CFxMaterialRedirectTable>(StringComparer.OrdinalIgnoreCase);
+                foreach (igEntity entity in originalIgz.Objects.OfType<igEntity>())
+                {
+                    CFxMaterialRedirectTable? table = entity.GetComponent<CStaticComponentData>()?._materialOverrides;
+                    if (table == null) continue;
+                    if (!string.IsNullOrEmpty(entity.ObjectName)) tablesByEntity.TryAdd(entity.ObjectName, table);
+                    var keys = table._keys?._data;
+                    var values = table._values?._data;
+                    if (keys == null || values == null) continue;
+                    for (int i = 0; i < Math.Min(keys.Count, values.Count); i++)
+                    {
+                        NamedReference? value = values[i].Reference;
+                        if (value == null || value.IsNullOrEmpty()) continue;
+                        string keyText = KeyText(keys[i].Reference);
+                        if (!originalValues.TryGetValue(keyText, out var counts))
+                            originalValues[keyText] = counts = new Dictionary<string, (NamedReference reference, int count)>();
+                        string valueText = KeyText(value);
+                        counts[valueText] = counts.TryGetValue(valueText, out var existing) ? (existing.reference, existing.count + 1) : (value, 1);
+                    }
+                }
+                if (tablesByEntity.Count > 0) originalTables[lower] = tablesByEntity;
+            }
+
+            // Sostituto come nella Switch: la tabella della stessa entita' nell'originale, oppure il materiale che la Switch usa
+            // piu' spesso per lo stesso materiale di partenza; solo un materiale che c'e' o che si puo' prendere dalla Switch
+            NamedReference? SwitchValue(string file, string entityName, string keyText, string who)
+            {
+                if (originalTables.TryGetValue(file, out var tablesByEntity) &&
+                    tablesByEntity.TryGetValue(entityName, out CFxMaterialRedirectTable? table))
+                {
+                    var keys = table._keys?._data;
+                    var values = table._values?._data;
+                    if (keys != null && values != null)
+                        for (int i = 0; i < Math.Min(keys.Count, values.Count); i++)
+                            if (KeyText(keys[i].Reference) == keyText && Usable(values[i].Reference, who)) return values[i].Reference;
+                }
+                if (originalValues.TryGetValue(keyText, out var counts))
+                    foreach (var (_, entry) in counts.OrderByDescending(e => e.Value.count))
+                        if (Usable(entry.reference, who)) return entry.reference;
+                return null;
+            }
+
+            int tableCount = 0, tableFiles = 0, pairCount = 0, replacedPairs = 0, removedPairs = 0, missingDefaults = 0, replacedDefaults = 0,
+                unknownValues = 0, missingKeys = 0;
+            var pairExamples = new Dictionary<string, (int count, string status)>();
+            var redirectNotes = new List<string>();
+            void Example(string text, string status)
+            {
+                pairExamples[text] = pairExamples.TryGetValue(text, out var existing) ? (existing.count + 1, existing.status) : (1, status);
+            }
+            foreach (IgArchiveFile file in convertedMaps)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                IgzFile igz;
+                try
+                {
+                    igz = file.ToIgzFile();
+                }
+                catch
+                {
+                    continue;
+                }
+                List<CFxMaterialRedirectTable> tables = igz.Objects.OfType<CFxMaterialRedirectTable>().ToList();
+                if (tables.Count == 0) continue;
+                tableFiles++;
+                tableCount += tables.Count;
+                var owners = new Dictionary<CFxMaterialRedirectTable, string>();
+                foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                {
+                    CFxMaterialRedirectTable? owned = entity.GetComponent<CStaticComponentData>()?._materialOverrides;
+                    if (owned != null) owners.TryAdd(owned, entity.ObjectName ?? "");
+                }
+                string fileName = NamespaceUtils.GetFileName(file.Path);
+                bool changed = false;
+                foreach (CFxMaterialRedirectTable table in tables)
+                {
+                    string entityName = owners.GetValueOrDefault(table) ?? "";
+                    string who = $"{fileName} {entityName}".Trim();
+
+                    // materiale predefinito
+                    bool? defaultAvailable = table._default == null ? null : Available(table._default.Reference);
+                    if (defaultAvailable == true) Example($"(predefinito) {KeyText(table._default!.Reference)}", "c'e'");
+                    else if (defaultAvailable == false && table._default != null)
+                    {
+                        missingDefaults++;
+                        string before = KeyText(table._default.Reference);
+                        NamedReference? replacement = null;
+                        if (originalTables.TryGetValue(lower, out var tablesByEntity) &&
+                            tablesByEntity.TryGetValue(entityName, out CFxMaterialRedirectTable? originalTable) &&
+                            originalTable._default != null && Usable(originalTable._default.Reference, who))
+                            replacement = originalTable._default.Reference;
+                        table._default.Reference = replacement?.Clone();
+                        if (replacement != null) replacedDefaults++;
+                        Example($"(predefinito) {before}", replacement != null ? $"la Switch non lo ha: come nella Switch, {KeyText(replacement)}" : "la Switch non lo ha: tolto");
+                        changed = true;
+                    }
+
+                    var keys = table._keys?._data;
+                    var values = table._values?._data;
+                    if (keys == null || values == null) continue;
+                    for (int i = Math.Min(keys.Count, values.Count) - 1; i >= 0; i--)
+                    {
+                        pairCount++;
+                        string keyText = KeyText(keys[i].Reference);
+                        string valueText = KeyText(values[i].Reference);
+                        if (Available(keys[i].Reference) == false) missingKeys++;
+                        bool? available = Available(values[i].Reference);
+                        if (available == null)
+                        {
+                            unknownValues++;
+                            Example($"{keyText} -> {valueText}", "non riconosciuto, lasciato");
+                            continue;
+                        }
+                        if (available == true)
+                        {
+                            Example($"{keyText} -> {valueText}", "c'e'");
+                            continue;
+                        }
+                        NamedReference? replacement = SwitchValue(lower, entityName, keyText, who);
+                        if (replacement != null)
+                        {
+                            values[i].Reference = replacement.Clone();
+                            replacedPairs++;
+                            Example($"{keyText} -> {valueText}", $"la Switch non lo ha: come nella Switch, {KeyText(replacement)}");
+                        }
+                        else
+                        {
+                            keys.RemoveAt(i);
+                            values.RemoveAt(i);
+                            removedPairs++;
+                            Example($"{keyText} -> {valueText}", "la Switch non lo ha: sostituzione tolta, resta il materiale del modello");
+                        }
+                        changed = true;
+                    }
+                }
+                if (!changed) continue;
+                try
+                {
+                    byte[] data = igz.Save();
+                    var check = new IgArchiveFile(file.Path, GameVersion.NSX);
+                    check.SetData(data);
+                    string? error = RereadError(check);
+                    if (error == null)
+                    {
+                        file.SetData(data);
+                        lines.Add($"sostituzioni dei materiali sistemate: {file.Path}");
+                    }
+                    else
+                    {
+                        redirectNotes.Add($"  ATTENZIONE: {fileName} dopo le modifiche non si rileggeva ({error}): lasciato com'era");
+                    }
+                }
+                catch (Exception e)
+                {
+                    redirectNotes.Add($"  ATTENZIONE: {fileName} non riscritto ({e.GetType().Name}: {e.Message}): lasciato com'era");
+                }
+            }
+
+            // File degli insiemi: la Switch ne ha una versione per archivio e il convertitore prende la prima che trova
+            var setLines = new List<string>();
+            foreach (string materialSet in users.Keys.Select(k => k.set).Distinct().OrderBy(s => s, StringComparer.Ordinal))
+            {
+                List<string> needed = users.Keys.Where(k => k.set == materialSet).Select(k => k.material).Distinct().ToList();
+                List<IgArchiveFile> versions = switchMaterials.SetFiles.GetValueOrDefault(materialSet) ?? [];
+                IgArchiveFile? current = output.Files.FirstOrDefault(f => f.IsIGZ() && MaterialIndex.InMaterialFolder(f.Path) &&
+                                                                          NamespaceUtils.GetFileName(f.Path, false).Equals(materialSet, StringComparison.OrdinalIgnoreCase));
+                if (current == null)
+                {
+                    string location = commonSets.Contains(materialSet) ? "negli archivi comuni"
+                                    : versions.Count > 0 ? "NON nell'archivio (la Switch ce l'ha solo negli archivi dei livelli)"
+                                    : "nessun file dell'insieme";
+                    setLines.Add($"  {materialSet}: {location}; materiali usati: {needed.Count}");
+                    continue;
+                }
+                // materiali usati che l'insieme contiene come oggetti (per nome o per hash del nome)
+                HashSet<string>? Covered((HashSet<string> names, HashSet<uint> hashes)? objects) => objects == null ? null :
+                    needed.Where(m => objects.Value.names.Contains(m) || objects.Value.hashes.Contains(NamespaceUtils.ComputeHash(m))).ToHashSet();
+                (HashSet<string> names, HashSet<uint> hashes)? currentObjects = ObjectNameSet(current);
+                HashSet<string>? covered = Covered(currentObjects);
+                List<IgArchiveFile> samePath = versions.Where(v => v.Path.Equals(current.Path, StringComparison.OrdinalIgnoreCase)).ToList();
+                List<IgArchiveFile> distinctVersions = samePath.GroupBy(v => v.UncompressedSize).Select(g => g.First()).ToList();
+                string line = $"  {materialSet}: " +
+                              (currentObjects == null || covered == null
+                                  ? "non leggibile"
+                                  : $"{covered.Count}/{needed.Count} materiali usati tra i suoi {currentObjects.Value.names.Count} oggetti") +
+                              $", versioni diverse sulla Switch: {distinctVersions.Count} (in {samePath.Count} archivi)";
+                // un'altra versione solo se contiene tutti quelli che contiene questa e qualcuno in piu'
+                if (covered != null && covered.Count < needed.Count && distinctVersions.Count > 1)
+                {
+                    IgArchiveFile? best = null;
+                    HashSet<string> bestCovered = covered;
+                    foreach (IgArchiveFile version in distinctVersions)
+                    {
+                        if (version.UncompressedSize == current.UncompressedSize) continue;
+                        HashSet<string>? versionCovered = Covered(ObjectNameSet(version));
+                        if (versionCovered == null || versionCovered.Count <= bestCovered.Count || !versionCovered.IsSupersetOf(covered)) continue;
+                        best = version;
+                        bestCovered = versionCovered;
+                    }
+                    if (best != null)
+                    {
+                        output.RemoveFile(current);
+                        output.AddFile(best.Clone());
+                        fromSwitch.Add(best);
+                        string bestArchive = sw.ArchiveOf.GetValueOrDefault(best) ?? "?";
+                        line += $"; presa la versione di {bestArchive}.pak ({bestCovered.Count}/{needed.Count})";
+                        lines.Add($"insieme di materiali preso dalla versione di {bestArchive}.pak: {best.Path}");
+                    }
+                }
+                setLines.Add(line);
+            }
+
+            var result = new List<string>
+            {
+                $"=== MATERIALI USATI PER INSIEME::MATERIALE ({users.Count}) ===",
+                "Modelli e decorazioni nominano i materiali come insieme::materiale (per nome o per hash), non con il nome del file",
+                "(\"insieme,materiale,opzioni\"): fino alla v46 i controlli sui file non li vedevano, --solo-usati li toglieva e il",
+                "file di un materiale che sulla Switch ha altre opzioni (un altro nome) veniva saltato. Senza materiale la grafica e' nera.",
+                $"  riferimenti: {bySet} per insieme::materiale, {byFileName} con il nome del file, da {userFiles.Count} file",
+                $"  gia' nell'archivio o negli archivi comuni: {presentCount}",
+                $"  aggiunti dalla Switch: {added.Count} file ({Mb((ulong)addedBytes)})",
+            };
+            result.AddRange(added.Take(60));
+            if (added.Count > 60) result.Add($"    ... e altri {added.Count - 60}");
+            result.Add($"  che la Switch non ha (stesso insieme e materiale, con nessuna opzione): {missing.Count}");
+            foreach ((string set, string material) key in missing.Take(40))
+            {
+                string pcName = pcMaterials.Instances.TryGetValue(key, out List<IgArchiveFile>? pcFiles)
+                    ? $"; sul PC: {NamespaceUtils.GetFileName(pcFiles[0].Path)}"
+                    : "; neanche nel livello PC";
+                List<string> otherSets = switchMaterials.Instances.Keys.Where(k => k.material == key.material && k.set != key.set)
+                    .Select(k => k.set).Distinct().Take(3).ToList();
+                string alternatives = otherSets.Count > 0 ? $"; sulla Switch c'e' in: {string.Join(", ", otherSets)}" : "";
+                result.Add($"    {key.set}::{key.material} (usato da {Who(users[key])}){pcName}{alternatives}");
+            }
+            if (missing.Count > 40) result.Add($"    ... e altri {missing.Count - 40}");
+            if (modelExamples.Count > 0)
+            {
+                result.Add("  esempi di riferimenti dei modelli ai materiali:");
+                result.AddRange(modelExamples);
+            }
+            result.Add("Insiemi (file insieme.igz) e quanti dei materiali usati contengono come oggetti:");
+            if (setLines.Count == 0) result.Add("  nessuno");
+            result.AddRange(setLines.Take(40));
+            if (setLines.Count > 40) result.Add($"  ... e altri {setLines.Count - 40}");
+            result.Add($"Sostituzioni dei materiali nelle decorazioni convertite dal PC (CFxMaterialRedirectTable): {tableCount} tabelle in {tableFiles} file, {pairCount} coppie");
+            result.Add($"  verso un materiale che la Switch non ha: {replacedPairs + removedPairs} coppie ({replacedPairs} fatte come nell'originale Switch, " +
+                       $"{removedPairs} tolte: resta il materiale del modello); materiale predefinito che la Switch non ha: {missingDefaults} " +
+                       $"({replacedDefaults} come nell'originale Switch, gli altri tolti); non riconosciuti (lasciati): {unknownValues}; " +
+                       $"materiali di partenza che la Switch non ha: {missingKeys}");
+            foreach (var (text, entry) in pairExamples.OrderBy(e => e.Value.status == "c'e'" ? 1 : 0).ThenByDescending(e => e.Value.count).Take(30))
+                result.Add($"    {entry.count,5}x {text} [{entry.status}]");
+            result.AddRange(redirectNotes);
+            result.Add("");
+            return result;
         }
 
         /// <summary>
