@@ -243,9 +243,16 @@ Dettagli:
   (`Arctic_Enemy_Immobile_Penguin`, con quelli Level 10 resta su LOADING; foche e altri pinguini
   restano). Righe `blocca il caricamento` nel rapporto; anche queste restano con
   `--tieni-entita-modalita`.
-- Modelli delle entità indicati per nome (dalla v42): i dati di molte entità (casse, piattaforme,
-  blocchi di collisione) indicano il modello con un testo (`_modelName`, `_skinName`, per esempio
-  `Levels\Crash1\crates\Crash_Crate_Nitro`), che i controlli sui riferimenti non vedevano. La
+- Modelli delle entità indicati per nome (dalla v42; dalla v46 anche quelli delle decorazioni):
+  molte entità indicano il modello con un testo: le decorazioni (muri, rocce, pavimenti) in
+  `CModelComponentData._fileName` (`models:\Levels\Crash2\Snow\C2_Snow_Island03.igb`), casse e
+  piattaforme in `_modelName`, i personaggi in `_skinName`. I controlli sui riferimenti non li
+  vedevano. Sul PC il gioco trova un modello in qualunque archivio, quindi l'editor, quando copi un
+  oggetto da un livello, copia solo i modelli che stanno nell'archivio di quel livello: i pavimenti
+  di neve e ghiaccio di Cold Hard Crash usano modelli che stanno nell'archivio di Snow Biz e nel
+  livello non c'erano. Sulla Switch quelle decorazioni non si vedevano, ma la loro collisione sì
+  (Level 10: Crash cammina e scivola su un pavimento che non si vede). Dalla v46 quei modelli si
+  copiano dall'archivio Switch che li ha, con i loro materiali e le loro texture. La
   sezione `MODELLI DELLE ENTITA' INDICATI PER NOME` li elenca tutti con dove stanno (nell'archivio,
   negli archivi comuni, solo nell'archivio di un altro livello, da nessuna parte); quelli che sulla
   Switch stanno solo nell'archivio di un altro livello vengono copiati, con le loro dipendenze.

@@ -2817,6 +2817,7 @@ namespace NST
             // stanno solo negli archivi di altri livelli si copiano (le loro dipendenze si aggiungono sotto). Il rapporto li
             // elenca tutti, insieme ai blocchi di collisione (CDynamicClipEntity) e al modello che mostrano
             var entityModels = new List<string>();
+            int modelsInArchive = 0;
             var clipBlocks = new List<string>();
             {
                 var originalPaths = new HashSet<string>(fromSwitch.Select(f => f.Path.ToLowerInvariant()));
@@ -2852,20 +2853,27 @@ namespace NST
                         continue;
                     }
                     string fileName = NamespaceUtils.GetFileName(converted.Path);
+                    void UseModel(string? modelName, string folder)
+                    {
+                        string? modelPath = ModelPathFromName(modelName, folder);
+                        if (modelPath == null) return;
+                        if (!modelUsers.TryGetValue(modelPath, out SortedSet<string>? users))
+                        {
+                            modelUsers[modelPath] = users = new SortedSet<string>(StringComparer.Ordinal);
+                            modelTexts[modelPath] = modelName!;
+                        }
+                        users.Add(fileName);
+                    }
+                    // Modello delle decorazioni (CModelComponentData._fileName, "models:\Levels\...\Nome.igb"): sul PC il gioco lo
+                    // trova in qualunque archivio, e l'editor non lo copia se non sta nell'archivio del livello da cui prendi
+                    // l'oggetto (i pavimenti di neve di Cold Hard Crash sono nell'archivio di Snow Biz). Sulla Switch non si vede
+                    foreach (CModelComponentData modelComponent in convertedIgz.Objects.OfType<CModelComponentData>())
+                        UseModel(modelComponent._fileName, "models");
                     foreach (CGameEntityData data in convertedIgz.Objects.OfType<CGameEntityData>())
                     {
                         // _modelName e' un modello (models/...), _skinName un personaggio (actors/..., come nell'editor)
-                        foreach (var (modelName, folder) in new[] { (data._modelName, "models"), (data._skinName, "actors") })
-                        {
-                            string? modelPath = ModelPathFromName(modelName, folder);
-                            if (modelPath == null) continue;
-                            if (!modelUsers.TryGetValue(modelPath, out SortedSet<string>? users))
-                            {
-                                modelUsers[modelPath] = users = new SortedSet<string>(StringComparer.Ordinal);
-                                modelTexts[modelPath] = modelName!;
-                            }
-                            users.Add(fileName);
-                        }
+                        UseModel(data._modelName, "models");
+                        UseModel(data._skinName, "actors");
                     }
 
                     List<CDynamicClipEntity> clips = convertedIgz.Objects.OfType<CDynamicClipEntity>().ToList();
@@ -2919,7 +2927,8 @@ namespace NST
                     {
                         status = "NON C'E' nel gioco Switch: quelle entita' non si vedono";
                     }
-                    entityModels.Add($"  {modelTexts[modelPath]}: {status} (usato da {who})");
+                    if (status == "nell'archivio") modelsInArchive++;
+                    else entityModels.Add($"  {modelTexts[modelPath]}: {status} (usato da {who})");
                 }
             }
 
@@ -3327,9 +3336,11 @@ namespace NST
                 if (copiedFromLevels.Count > 80) report.AppendLine($"  ... e altri {copiedFromLevels.Count - 80}");
                 report.AppendLine();
             }
-            report.AppendLine($"=== MODELLI DELLE ENTITA' INDICATI PER NOME ({entityModels.Count}) ===");
-            report.AppendLine("Modelli scritti nei dati delle entita' (_modelName, _skinName: casse, piattaforme, blocchi...) e dove");
-            report.AppendLine("stanno. Quelli che sulla Switch sono solo nell'archivio di un altro livello vengono copiati.");
+            report.AppendLine($"=== MODELLI DELLE ENTITA' INDICATI PER NOME ({entityModels.Count + modelsInArchive}) ===");
+            report.AppendLine("Modelli scritti come testo nelle entita' (decorazioni: _fileName; casse, piattaforme: _modelName; personaggi:");
+            report.AppendLine("_skinName). Sul PC il gioco li trova in qualunque archivio e l'editor non sempre li copia; sulla Switch quelli");
+            report.AppendLine("che non sono nell'archivio del livello non si vedrebbero: se stanno nell'archivio di un altro livello vengono copiati.");
+            report.AppendLine($"  {modelsInArchive} gia' nell'archivio; gli altri:");
             foreach (string line in entityModels.Take(80)) report.AppendLine(line);
             if (entityModels.Count > 80) report.AppendLine($"  ... e altri {entityModels.Count - 80}");
             report.AppendLine("Blocchi di collisione (CDynamicClipEntity: si cammina sopra, si vede solo il loro modello):");
@@ -4777,6 +4788,8 @@ namespace NST
             p = p.TrimStart('/');
             if (p.Length == 0) return null;
             if (!p.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase)) p = folder + "/" + p;
+            // l'estensione del formato di partenza (.igb) diventa .igz, come nei file del gioco
+            if (p.EndsWith(".igb", StringComparison.OrdinalIgnoreCase)) p = p.Substring(0, p.Length - 4);
             if (!p.EndsWith(".igz", StringComparison.OrdinalIgnoreCase)) p += ".igz";
             return p.ToLowerInvariant();
         }
