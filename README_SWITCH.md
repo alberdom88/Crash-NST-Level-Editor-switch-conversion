@@ -53,7 +53,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
-        [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]...
+        [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]...
         [--originale-switch <testo>]...
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
@@ -299,9 +299,21 @@ Dettagli:
   dell'entità), colore e intensità, la distanza dalla partenza (`PlayerStart`) e se la contengono;
   prima quelli che contengono la partenza e quelli scuri (`SCURO`: volume di colore quasi nero, luce
   negativa). Un volume di colore scuro scurisce le decorazioni che ha dentro: pavimento e muri neri
-  fino al bordo sfumato della sfera, Crash, casse e nemici normali: è il sospetto principale per il
-  pavimento nero del Level 10, che ha `Black01`, `Black02` e `Black03` dall'illuminazione di
-  Ruination. Per provare a toglierne uno: `--togli-entita <file>:<nome>`.
+  fino al bordo sfumato della sfera, Crash, casse e nemici normali. Nel Level 10 la cupola nera
+  sparisce togliendo `Black01`, `Black02` e `Black03` dall'illuminazione di Ruination
+  (`--togli-entita L219_Ruination_lighting:*`); sotto, però, il pavimento non c'è (vedi le occlusioni).
+- Occlusioni (dalla v49): sulla console il gioco nasconde le parti del livello che non si vedono da
+  dove sta Crash, con zone (`COcclusionTrigger`: quando Crash o la telecamera ci entra) che attivano
+  gruppi (`COcclusionBox`: le decorazioni e gli oggetti da nascondere, o da mostrare se il gruppo è
+  invertito). Quelle copiate dall'editor con un file di un altro livello (nel Level 10 le 2 zone e i
+  4 gruppi di `L202_SnowGo_Reflections`) sono fatte per quel livello: nel livello nuovo possono
+  nascondere decorazioni a caso (nel Level 10 probabilmente il pavimento, la ringhiera e il ponte),
+  mentre Crash, casse e nemici restano. Sul PC non sembrano contare. Dalla v49 si spengono: zone senza gruppi da attivare,
+  gruppi senza entità da nascondere, non invertiti e non attivi; `--tieni-occlusioni` le lascia come
+  sono. La sezione `OCCLUSIONI` le elenca com'erano (posizione, limiti, opzioni, entità che
+  nascondevano, se contengono la partenza) e `DECORAZIONI VICINO ALLA PARTENZA` le 60 entità con un
+  modello più vicine alla partenza, con quello che può nasconderle (`NELLE OCCLUSIONI`, `NASCOSTA`,
+  importanza per la distanza, scala).
 - Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
   controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
   hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non

@@ -97,6 +97,9 @@ namespace NST
             // converti: non togliere le entita' con un comportamento prese da livelli con una modalita' che il livello
             // non ha (sub, tigre, orso, moto d'acqua...) e dai boss (dalla v39 si tolgono da sole)
             public bool KeepModeEntities;
+            // converti: non spegnere le occlusioni (COcclusionTrigger, COcclusionBox) dei file convertiti: sulla console nascondono
+            // decorazioni, pensate per il livello da cui vengono (dalla v49 si spengono da sole)
+            public bool KeepOcclusion;
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
             public string Reflections = "auto";
@@ -211,6 +214,7 @@ namespace NST
                 else if (name == "--senza-modalita") { options.WithoutMode = true; rest.RemoveAt(i); }
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
+                else if (name == "--tieni-occlusioni") { options.KeepOcclusion = true; rest.RemoveAt(i); }
                 else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--pavimento-blocchi" && hasValue)
                 {
@@ -259,7 +263,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2129,6 +2133,8 @@ namespace NST
             var usedFloorFilters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // --pavimento-blocchi usati
             var unreadableFiles = new List<string>();  // file convertiti che non si rileggono
             var lightVolumes = new List<LightVolume>();  // luci, volumi di colore e box visivi (rapporto)
+            var occlusionInfos = new List<OcclusionInfo>();  // occlusioni dei file convertiti, prima di spegnerle (rapporto)
+            var placedEntities = new List<PlacedEntity>();  // decorazioni, blocchi e oggetti con un modello (rapporto)
             (float x, float y, float z)? playerStart = null;  // partenza del livello (rapporto)
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
@@ -2639,13 +2645,37 @@ namespace NST
                             }
                         }
 
-                        // Diagnosi: luci, volumi di colore e box visivi, con la partenza del livello (rapporto)
+                        // Occlusioni (COcclusionTrigger, COcclusionBox): sulla console nascondono le parti del livello che non si vedono
+                        // da dove sta Crash, ma quelle copiate da un altro livello (Snow Go) sono fatte per quel livello e nel livello
+                        // nuovo nascondono decorazioni a caso (il pavimento del Level 10). Descritte per il rapporto e spente, tranne
+                        // con --tieni-occlusioni (vedi NeutralizeOcclusion)
+                        if (path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) && igz.Objects.Any(o => o is COcclusionTrigger || o is COcclusionBox))
+                        {
+                            try
+                            {
+                                occlusionInfos.AddRange(DescribeOcclusion(igz, target));
+                                if (!options.KeepOcclusion)
+                                {
+                                    var (triggerCount, boxCount) = NeutralizeOcclusion(igz);
+                                    Increment(counters, "file con le occlusioni spente");
+                                    removedEntities.Add($"  occlusioni spente, {target}: {triggerCount} zone e {boxCount} gruppi (sulla console nascondevano decorazioni)");
+                                    if (otherLevelFile) modifiedOtherFiles.Add(target);
+                                }
+                            }
+                            catch (Exception occlusionError)
+                            {
+                                lines.Add($"occlusioni non lette in {target}: {occlusionError.GetType().Name}: {occlusionError.Message}");
+                            }
+                        }
+
+                        // Diagnosi: luci, volumi di colore e box visivi, con la partenza del livello, e le entita' con un modello (rapporto)
                         if (path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
                                 (float x, float y, float z)? foundStart = CollectLightVolumes(igz, target, !otherLevelFile || InPcPackage(path), lightVolumes);
                                 if (foundStart != null && (playerStart == null || mainFile)) playerStart = foundStart;
+                                CollectPlacedEntities(igz, target, !otherLevelFile || InPcPackage(path), placedEntities);
                             }
                             catch (Exception lightError)
                             {
@@ -3402,6 +3432,7 @@ namespace NST
             if (graphicsDependencies.Count > 80) report.AppendLine($"  ... e altre {graphicsDependencies.Count - 80}");
             report.AppendLine();
             AppendLightVolumes(report, lightVolumes, playerStart);
+            AppendOcclusionAndNearStart(report, occlusionInfos, placedEntities, playerStart, !options.KeepOcclusion);
             if (unreadableFiles.Count > 0)
             {
                 report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
@@ -4412,6 +4443,230 @@ namespace NST
                                   $"{FormatFloat(volume.Z)}{distanceText}, {volume.Details}{(volume.Loaded ? "" : " (file fuori dal pacchetto: il gioco non la carica)")}");
             }
             if (rows.Count > 80) report.AppendLine($"  ... e altri {rows.Count - 80}");
+            report.AppendLine();
+        }
+
+        /// <summary>
+        /// Zona (COcclusionTrigger) o gruppo (COcclusionBox) delle occlusioni di un file, per il rapporto: limiti approssimati
+        /// nel mondo (posizione + scala per i limiti, senza la rotazione) e, per un gruppo, le entita' che nasconde
+        /// </summary>
+        private sealed record OcclusionInfo(string File, string Kind, string Name, float X, float Y, float Z,
+                                            float MinX, float MinY, float MinZ, float MaxX, float MaxY, float MaxZ,
+                                            string Details, List<string> Entities);
+
+        /// <summary>
+        /// Decorazione, blocco di collisione o oggetto con un modello di un file di posizionamento, per il rapporto
+        /// </summary>
+        private sealed record PlacedEntity(string File, string Name, string Kind, string Model, float X, float Y, float Z,
+                                           string Details, uint NameHash);
+
+        /// <summary>
+        /// Nomi degli oggetti di una lista di riferimenti (un hash, se il nome non si conosce)
+        /// </summary>
+        private static List<string> HandleNames(igSmartHandleList? list)
+        {
+            var names = new List<string>();
+            if (list == null) return names;
+            foreach (igHandleMetaField handle in list._data)
+            {
+                string name = handle.Reference?.objectName ?? "";
+                if (name.Length > 0) names.Add(name);
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// Limiti nel mondo di un volume (posizione + scala per i limiti locali), senza la rotazione
+        /// </summary>
+        private static (float minX, float minY, float minZ, float maxX, float maxY, float maxZ) WorldBounds(
+            igVec3fMetaField position, igVec3fMetaField scale, igVec3fMetaField min, igVec3fMetaField max)
+        {
+            float sx = scale._x == 0 ? 1 : scale._x, sy = scale._y == 0 ? 1 : scale._y, sz = scale._z == 0 ? 1 : scale._z;
+            float ax = position._x + min._x * sx, bx = position._x + max._x * sx;
+            float ay = position._y + min._y * sy, by = position._y + max._y * sy;
+            float az = position._z + min._z * sz, bz = position._z + max._z * sz;
+            return (Math.Min(ax, bx), Math.Min(ay, by), Math.Min(az, bz), Math.Max(ax, bx), Math.Max(ay, by), Math.Max(az, bz));
+        }
+
+        /// <summary>
+        /// Occlusioni di un file: zone (COcclusionTrigger: quando Crash, o la telecamera, ci entra attivano dei gruppi) e
+        /// gruppi (COcclusionBox: le decorazioni e gli oggetti che nascondono, o che mostrano se il gruppo e' invertito)
+        /// </summary>
+        private static List<OcclusionInfo> DescribeOcclusion(IgzFile igz, string file)
+        {
+            var result = new List<OcclusionInfo>();
+            string fileName = NamespaceUtils.GetFileName(file);
+            foreach (igObject obj in igz.Objects)
+            {
+                if (obj is COcclusionTrigger trigger)
+                {
+                    var (minX, minY, minZ, maxX, maxY, maxZ) = WorldBounds(trigger._position, trigger._scale, trigger._min, trigger._max);
+                    result.Add(new OcclusionInfo(fileName, "zona", trigger.ObjectName ?? "?", trigger._position._x, trigger._position._y, trigger._position._z,
+                        minX, minY, minZ, maxX, maxY, maxZ,
+                        $"scala {FormatFloat(trigger._scale._x)} {FormatFloat(trigger._scale._y)} {FormatFloat(trigger._scale._z)}, " +
+                        $"rotazione {FormatFloat(trigger._rotation._x)} {FormatFloat(trigger._rotation._y)} {FormatFloat(trigger._rotation._z)}, " +
+                        $"accesa {(trigger._state ? "si'" : "no")}, con la telecamera {(trigger._useCameraPosition ? "si'" : "no")}, " +
+                        $"gruppi {trigger._boxes?._data.Count ?? 0}", []));
+                }
+                else if (obj is COcclusionBox box)
+                {
+                    var (minX, minY, minZ, maxX, maxY, maxZ) = WorldBounds(box._position, box._scale, box._min, box._max);
+                    List<string> statics = HandleNames(box._entities);
+                    List<string> dynamics = HandleNames(box._dynamicEntities);
+                    List<string> receivers = HandleNames(box._messageReceivingEntities);
+                    result.Add(new OcclusionInfo(fileName, "gruppo", box.ObjectName ?? "?", box._position._x, box._position._y, box._position._z,
+                        minX, minY, minZ, maxX, maxY, maxZ,
+                        $"inverte {(box._occlusionFlags._invertVisibility ? "si'" : "no")}, opzioni {box._occlusionFlags._flags}, " +
+                        $"stato {(box._occlusionFlags._state ? "si'" : "no")}, decorazioni {statics.Count}, oggetti {dynamics.Count}, avvisati {receivers.Count}",
+                        statics.Concat(dynamics).ToList()));
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Spegne le occlusioni di un file: zone senza gruppi da attivare, gruppi senza entita' da nascondere, non invertiti e
+        /// non attivi. Sulla console nascondono le parti di un livello che non si vedono da dove sta Crash: quelle di un altro
+        /// livello (Snow Go) sono fatte per quel livello e nel livello nuovo nascondono decorazioni a caso (il pavimento del
+        /// Level 10), mentre Crash, casse e nemici restano. Restituisce quante zone e quanti gruppi ha spento
+        /// </summary>
+        private static (int triggers, int boxes) NeutralizeOcclusion(IgzFile igz)
+        {
+            int triggers = 0, boxes = 0;
+            foreach (igObject obj in igz.Objects)
+            {
+                if (obj is COcclusionTrigger trigger)
+                {
+                    trigger._boxes?._data.Clear();
+                    triggers++;
+                }
+                else if (obj is COcclusionBox box)
+                {
+                    box._entities?._data.Clear();
+                    box._dynamicEntities?._data.Clear();
+                    box._messageReceivingEntities?._data.Clear();
+                    box._occlusionFlags._invertVisibility = false;
+                    box._occlusionFlags._state = false;
+                    boxes++;
+                }
+            }
+            return (triggers, boxes);
+        }
+
+        /// <summary>
+        /// Decorazioni (modello in CModelComponentData), blocchi di collisione e oggetti con un modello di un file, con quello
+        /// che puo' nasconderli (per il rapporto)
+        /// </summary>
+        private static void CollectPlacedEntities(IgzFile igz, string file, bool loaded, List<PlacedEntity> into)
+        {
+            string fileName = NamespaceUtils.GetFileName(file);
+            foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+            {
+                CModelComponentData? modelComponent = entity.GetComponent<CModelComponentData>();
+                CStaticComponentData? staticComponent = entity.GetComponent<CStaticComponentData>();
+                string? kind = null;
+                string? modelName = null;
+                var details = new List<string>();
+                if (modelComponent != null)
+                {
+                    kind = "decorazione";
+                    modelName = modelComponent._fileName;
+                    if (modelComponent._fadeFx != 1f) details.Add($"fadeFx {FormatFloat(modelComponent._fadeFx)}");
+                    details.Add($"distanza del modello {modelComponent._distanceCullImportance}");
+                }
+                else if (entity is CDynamicClipEntity clip)
+                {
+                    kind = "blocco di collisione";
+                    modelName = (clip._entityData as CGameEntityData)?._modelName;
+                    details.Add($"limiti {FormatFloat(clip._min._x)} {FormatFloat(clip._min._y)} {FormatFloat(clip._min._z)} / " +
+                                $"{FormatFloat(clip._max._x)} {FormatFloat(clip._max._y)} {FormatFloat(clip._max._z)}");
+                }
+                else if (entity._entityData is CGameEntityData gameData && !string.IsNullOrWhiteSpace(gameData._modelName))
+                {
+                    kind = "oggetto";
+                    modelName = gameData._modelName;
+                }
+                if (kind == null) continue;
+                if (staticComponent != null)
+                {
+                    details.Add($"distanza {staticComponent._flagsBitfield._distanceCullImportance}");
+                    if (staticComponent._flagsBitfield._disableVisual) details.Add("NASCOSTA (disableVisual)");
+                    if (staticComponent._flagsBitfield._ignoreOcclusionBoxes) details.Add("ignora le occlusioni");
+                    if (staticComponent._materialOverrides != null)
+                        details.Add($"sostituzioni dei materiali {staticComponent._materialOverrides._keys?._data.Count ?? 0}");
+                }
+                if (entity is CGameEntity gameEntity && gameEntity._ignoreOcclusionBoxes) details.Add("ignora le occlusioni");
+                if (entity is CEntity baseEntity && baseEntity._properties._startHidden) details.Add("NASCOSTA all'inizio");
+                if (entity._bitfield._isHidden) details.Add("isHidden");
+                igVec3fMetaField? scale = entity._transform?._nonUniformPersistentParentSpaceScale;
+                if (scale != null && (scale._x != 1f || scale._y != 1f || scale._z != 1f))
+                    details.Add($"scala {FormatFloat(scale._x)} {FormatFloat(scale._y)} {FormatFloat(scale._z)}");
+                if (!loaded) details.Add("file fuori dal pacchetto");
+                string name = entity.ObjectName ?? "?";
+                into.Add(new PlacedEntity(fileName, name, kind, string.IsNullOrWhiteSpace(modelName) ? "-" : modelName,
+                    entity._parentSpacePosition._x, entity._parentSpacePosition._y, entity._parentSpacePosition._z,
+                    string.Join(", ", details), NamespaceUtils.ComputeHash(name)));
+            }
+        }
+
+        /// <summary>
+        /// Rapporto: occlusioni (zone e gruppi, quali contengono la partenza) e le decorazioni piu' vicine alla partenza, con
+        /// quelle che i gruppi nascondevano
+        /// </summary>
+        private static void AppendOcclusionAndNearStart(StringBuilder report, List<OcclusionInfo> occlusion, List<PlacedEntity> placed,
+                                                        (float x, float y, float z)? start, bool neutralized)
+        {
+            report.AppendLine($"=== OCCLUSIONI ({occlusion.Count}) ===");
+            report.AppendLine("Zone (COcclusionTrigger) e gruppi (COcclusionBox) con cui sulla console il gioco nasconde le parti del livello che non si");
+            report.AppendLine("vedono da dove sta Crash. Quelle di un altro livello (Snow Go) sono fatte per quel livello: nel livello nuovo nascondono");
+            report.AppendLine("decorazioni a caso, come il pavimento, mentre Crash, casse e nemici restano. Sul PC non sembrano contare.");
+            report.AppendLine(neutralized
+                ? "Dalla v49 si spengono (zone senza gruppi, gruppi senza entita'); --tieni-occlusioni le lascia come sono. Valori di prima."
+                : "Lasciate come sono (--tieni-occlusioni).");
+            var hiddenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var hiddenHashes = new HashSet<uint>();
+            foreach (OcclusionInfo info in occlusion)
+                foreach (string entityName in info.Entities)
+                {
+                    hiddenNames.Add(entityName);
+                    hiddenHashes.Add(entityName.All(char.IsDigit) && uint.TryParse(entityName, out uint entityHash) ? entityHash : NamespaceUtils.ComputeHash(entityName));
+                }
+            if (occlusion.Count == 0) report.AppendLine("  nessuna");
+            foreach (OcclusionInfo info in occlusion)
+            {
+                bool inside = start != null &&
+                              start.Value.x >= info.MinX && start.Value.x <= info.MaxX &&
+                              start.Value.y >= info.MinY && start.Value.y <= info.MaxY &&
+                              start.Value.z >= info.MinZ && start.Value.z <= info.MaxZ;
+                string examples = info.Entities.Count > 0 ? $"; per esempio {string.Join(", ", info.Entities.Take(8))}" : "";
+                report.AppendLine($"  {(inside ? "CONTIENE LA PARTENZA " : "")}[{info.Kind}] {info.File} {info.Name}: posizione {FormatFloat(info.X)} " +
+                                  $"{FormatFloat(info.Y)} {FormatFloat(info.Z)}, limiti {FormatFloat(info.MinX)} {FormatFloat(info.MinY)} {FormatFloat(info.MinZ)} / " +
+                                  $"{FormatFloat(info.MaxX)} {FormatFloat(info.MaxY)} {FormatFloat(info.MaxZ)}, {info.Details}{examples}");
+            }
+            report.AppendLine();
+
+            report.AppendLine("=== DECORAZIONI VICINO ALLA PARTENZA ===");
+            report.AppendLine("Le decorazioni, i blocchi di collisione e gli oggetti con un modello piu' vicini alla partenza (PlayerStart), con quello che");
+            report.AppendLine("puo' nasconderli: NELLE OCCLUSIONI (un gruppo delle occlusioni le nascondeva), NASCOSTA, distanza (importanza per la");
+            report.AppendLine("distanza da cui spariscono), scala. Posizioni come nel file (rispetto all'entita' genitore, se ce l'ha).");
+            if (start == null)
+            {
+                report.AppendLine("  partenza (PlayerStart) non trovata");
+                report.AppendLine();
+                return;
+            }
+            int occluded = placed.Count(p => hiddenNames.Contains(p.Name) || hiddenHashes.Contains(p.NameHash));
+            report.AppendLine($"  partenza: {FormatFloat(start.Value.x)} {FormatFloat(start.Value.y)} {FormatFloat(start.Value.z)}; entita' con un modello in tutto il livello: " +
+                              $"{placed.Count}, nelle occlusioni: {occluded}");
+            foreach (PlacedEntity entity in placed
+                         .Select(p => (entity: p, distance: Math.Sqrt(Math.Pow(p.X - start.Value.x, 2) + Math.Pow(p.Y - start.Value.y, 2) + Math.Pow(p.Z - start.Value.z, 2))))
+                         .OrderBy(p => p.distance).Take(60).Select(p => p.entity))
+            {
+                double distance = Math.Sqrt(Math.Pow(entity.X - start.Value.x, 2) + Math.Pow(entity.Y - start.Value.y, 2) + Math.Pow(entity.Z - start.Value.z, 2));
+                bool hidden = hiddenNames.Contains(entity.Name) || hiddenHashes.Contains(entity.NameHash);
+                report.AppendLine($"  {(hidden ? "NELLE OCCLUSIONI " : "")}[{entity.Kind}] {entity.File} {entity.Name}: modello {entity.Model}, posizione " +
+                                  $"{FormatFloat(entity.X)} {FormatFloat(entity.Y)} {FormatFloat(entity.Z)}, distanza {FormatFloat((float)distance)}, {entity.Details}");
+            }
             report.AppendLine();
         }
 
