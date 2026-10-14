@@ -2126,6 +2126,7 @@ namespace NST
             // File di altri livelli copiati dall'editor: contenuto (per il rapporto) ed entita' tolte
             var otherContent = new StringBuilder();
             var removedEntities = new List<string>();
+            var usedFloorFilters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // --pavimento-blocchi usati
             var unreadableFiles = new List<string>();  // file convertiti che non si rileggono
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
@@ -2589,6 +2590,23 @@ namespace NST
                             if (modified) modifiedOtherFiles.Add(target);
                         }
 
+                        // --pavimento-blocchi: sui blocchi di collisione del file (si cammina sopra ma non si vedono) una copia di
+                        // una decorazione del livello, grande come il blocco e senza collisione
+                        var floorRequests = options.FloorBlocks.Where(f => path.Contains(f.file, StringComparison.OrdinalIgnoreCase)).ToList();
+                        if (floorRequests.Count > 0 && igz.Objects.OfType<CDynamicClipEntity>().Any())
+                        {
+                            foreach (var request in floorRequests) usedFloorFilters.Add(request.file);
+                            try
+                            {
+                                removedEntities.AddRange(AddFloorOverClips(igz, path, floorRequests[^1].template, pc, sw));
+                            }
+                            catch (Exception floorError)
+                            {
+                                removedEntities.Add($"  ERRORE --pavimento-blocchi, {path}: {floorError.GetType().Name}: {floorError.Message}");
+                            }
+                            if (otherLevelFile) modifiedOtherFiles.Add(target);
+                        }
+
                         igz.GameVersion = GameVersion.NSX;
                         string? newNamespace = target != path ? NamespaceUtils.GetFileName(target, false) : null;
 
@@ -2721,33 +2739,8 @@ namespace NST
                 }
             }
 
-            // --pavimento-blocchi: sui blocchi di collisione (si cammina sopra ma non si vedono) si mette una copia di una
-            // decorazione del livello (modello e materiali che sulla Switch si vedono, come i muri e le rocce), ingrandita e
-            // spostata perche' copra il blocco, senza collisione (il blocco resta com'e')
-            var floorLines = new List<string>();
-            foreach (var floorGroup in options.FloorBlocks.GroupBy(f => f.file, StringComparer.OrdinalIgnoreCase))
-            {
-                string templateText = floorGroup.Last().template;
-                foreach (IgArchiveFile clipFile in output.Files.Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) &&
-                                                                         f.Path.Contains(floorGroup.Key, StringComparison.OrdinalIgnoreCase)).ToList())
-                {
-                    try
-                    {
-                        floorLines.AddRange(AddFloorOverClips(clipFile, templateText, output, sw));
-                    }
-                    catch (Exception e)
-                    {
-                        floorLines.Add($"  ERRORE --pavimento-blocchi, {clipFile.Path}: {e.GetType().Name}: {e.Message}");
-                    }
-                }
-                if (!output.Files.Any(f => f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) && f.Path.Contains(floorGroup.Key, StringComparison.OrdinalIgnoreCase)))
-                    floorLines.Add($"  --pavimento-blocchi {floorGroup.Key}: nessun file del livello con questo testo nel percorso");
-            }
-            foreach (string line in floorLines)
-            {
-                removedEntities.Add(line);
-                if (line.Contains("pavimento visibile")) Increment(counters, "file con i blocchi di collisione coperti (--pavimento-blocchi)");
-            }
+            foreach (var (floorFile, _) in options.FloorBlocks.Where(f => !usedFloorFilters.Contains(f.file)))
+                removedEntities.Add($"  --pavimento-blocchi {floorFile}: nessun file con blocchi di collisione e questo testo nel percorso");
 
             // Everything else of the original level (its own assets with their Switch names)
             if (baseArchive != null)
@@ -4633,23 +4626,31 @@ namespace NST
         /// "ice" nel nome dello stesso livello del file, poi di qualunque livello. Il modello della copia, ingrandito, copre il box
         /// del blocco (da _min a _max nello spazio dell'entita'); la sua collisione e' spenta. Torna le righe per il rapporto
         /// </summary>
-        private static List<string> AddFloorOverClips(IgArchiveFile clipFile, string templateText, IgArchive output, ArchiveIndex sw)
+        private static List<string> AddFloorOverClips(IgzFile clipIgz, string clipPath, string templateText, IgArchive pc, ArchiveIndex sw)
         {
             var result = new List<string>();
-            IgzFile clipIgz = clipFile.ToIgzFile();
             List<CDynamicClipEntity> clips = clipIgz.Objects.OfType<CDynamicClipEntity>().ToList();
             if (clips.Count == 0) return result;
 
-            // decorazioni candidate: prima i file dello stesso livello del file dei blocchi
-            string[] clipParts = clipFile.Path.Split('/');
+            // decorazioni candidate, dai file del PC (letti come li legge l'editor): prima quelli dello stesso livello
+            string[] clipParts = clipPath.Split('/');
             string sameLevel = clipParts.Length >= 3 ? $"maps/{clipParts[1]}/{clipParts[2]}/" : "";
-            var candidateFiles = output.Files
-                .Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) && f != clipFile)
+            var candidateFiles = pc.Files
+                .Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) &&
+                            !f.Path.Equals(clipPath, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(f => sameLevel.Length > 0 && f.Path.StartsWith(sameLevel, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
                 .ToList();
             (IgzFile igz, igEntity entity, string file, string model, THREE.Vector3 min, THREE.Vector3 max)? chosen = null;
             int bestRank = int.MaxValue;
             var tried = new List<string>();
+            // modelli Switch per nome (_fileName puo' essere un percorso o solo il nome): la copia si vede solo se la Switch ha
+            // il suo modello
+            var modelsByName = new Dictionary<string, IgArchiveFile>();
+            foreach (var (path, file) in sw.ByPath)
+                if (path.StartsWith("models/") && path.EndsWith(".igz")) modelsByName.TryAdd(NamespaceUtils.GetFileName(path, false), file);
+            int seen = 0, withModel = 0, modelMissing = 0, noModelData = 0, badBounds = 0;
+            var missingExamples = new List<string>();
+            var componentExamples = new SortedSet<string>(StringComparer.Ordinal);
             foreach (IgArchiveFile candidateFile in candidateFiles)
             {
                 IgzFile candidateIgz;
@@ -4664,26 +4665,49 @@ namespace NST
                 foreach (igEntity entity in candidateIgz.Objects.OfType<igEntity>().Where(e => e.GetType() == typeof(igEntity)))
                 {
                     string name = entity.ObjectName ?? "";
+                    seen++;
+                    if (componentExamples.Count < 6)
+                        componentExamples.Add(string.Join("+", entity.GetComponents().Select(c => c.GetType().Name)));
                     string? fileName = entity.GetComponent<CModelComponentData>()?._fileName;
-                    if (string.IsNullOrWhiteSpace(fileName) || entity.GetComponent<CStaticComponentData>() == null) continue;
+                    if (string.IsNullOrWhiteSpace(fileName)) continue;
+                    withModel++;
+                    bool isStatic = entity.GetComponent<CStaticComponentData>() != null;
                     int rank;
-                    if (templateText.Length > 0) rank = name.Contains(templateText, StringComparison.OrdinalIgnoreCase) ? 0 : int.MaxValue;
+                    if (templateText.Length > 0)
+                    {
+                        if (!name.Contains(templateText, StringComparison.OrdinalIgnoreCase)) continue;
+                        rank = 0;
+                    }
                     // "Ice" e "Floor" con la maiuscola (IceFloor, CliffFloor), non "Lattice" o "Office"
                     else rank = name.Contains("Ice", StringComparison.Ordinal) ? 0 : name.Contains("Floor", StringComparison.Ordinal) ? 1 : 2;
                     if (candidateFile.Path.StartsWith(sameLevel, StringComparison.OrdinalIgnoreCase) == false) rank += 3;
+                    if (!isStatic) rank += 6;  // meglio le decorazioni statiche, come quelle del livello
                     if (rank >= bestRank) continue;
 
                     // misure del modello (dal modello nell'archivio o nel gioco Switch)
                     string? modelPath = ModelPathFromName(fileName);
-                    IgArchiveFile? modelFile = modelPath == null ? null
-                        : output.Files.FirstOrDefault(f => f.Path.Equals(modelPath, StringComparison.OrdinalIgnoreCase)) ?? sw.ByPath.GetValueOrDefault(modelPath);
-                    if (modelFile == null) continue;
+                    IgArchiveFile? modelFile = modelPath == null ? null : sw.ByPath.GetValueOrDefault(modelPath);
+                    modelFile ??= modelsByName.GetValueOrDefault(NamespaceUtils.GetFileName(fileName.Replace('\\', '/'), false).ToLowerInvariant());
+                    if (modelFile == null)
+                    {
+                        modelMissing++;
+                        if (missingExamples.Count < 3) missingExamples.Add(fileName);
+                        continue;
+                    }
                     try
                     {
-                        if (modelFile.ToIgzFile().FindObject<igModelData>() is not igModelData modelData) continue;
+                        if (modelFile.ToIgzFile().FindObject<igModelData>() is not igModelData modelData)
+                        {
+                            noModelData++;
+                            continue;
+                        }
                         var min = new THREE.Vector3(modelData._min._x, modelData._min._y, modelData._min._z);
                         var max = new THREE.Vector3(modelData._max._x, modelData._max._y, modelData._max._z);
-                        if (max.X <= min.X || max.Y <= min.Y || max.Z <= min.Z) continue;
+                        if (max.X <= min.X || max.Y <= min.Y || max.Z <= min.Z)
+                        {
+                            badBounds++;
+                            continue;
+                        }
                         chosen = (candidateIgz, entity, candidateFile.Path, fileName, min, max);
                         bestRank = rank;
                     }
@@ -4696,9 +4720,13 @@ namespace NST
             }
             if (chosen == null)
             {
-                result.Add($"  ATTENZIONE --pavimento-blocchi, {clipFile.Path}: nessuna decorazione da copiare" +
+                result.Add($"  ATTENZIONE --pavimento-blocchi, {clipPath}: nessuna decorazione da copiare" +
                            (templateText.Length > 0 ? $" con '{templateText}' nel nome" : "") +
                            (tried.Count > 0 ? $" (modelli non leggibili: {string.Join(", ", tried)})" : "") + ": blocchi lasciati invisibili");
+                result.Add($"    file guardati {candidateFiles.Count}, entita' semplici {seen}, con modello {withModel}, " +
+                           $"modello non trovato {modelMissing}{(missingExamples.Count > 0 ? $" (es. {string.Join(", ", missingExamples)})" : "")}, " +
+                           $"senza igModelData {noModelData}, misure non valide {badBounds}");
+                if (componentExamples.Count > 0) result.Add($"    componenti delle entita' semplici (esempi): {string.Join("; ", componentExamples)}");
                 return result;
             }
 
@@ -4731,18 +4759,7 @@ namespace NST
                 added++;
             }
             if (added == 0) return result;
-
-            byte[] before = clipFile.Uncompress();
-            clipIgz.GameVersion = GameVersion.NSX;
-            clipFile.SetData(clipIgz.Save());
-            string? rereadError = RereadError(clipFile);
-            if (rereadError != null)
-            {
-                clipFile.SetData(before);
-                result.Add($"  ATTENZIONE --pavimento-blocchi, {clipFile.Path}: con le copie il file non si rilegge ({rereadError}): lasciato com'era");
-                return result;
-            }
-            result.Add($"  pavimento visibile, {clipFile.Path}: {added} blocchi coperti da copie di {template.entity.ObjectName} " +
+            result.Add($"  pavimento visibile, {clipPath}: {added} blocchi coperti da copie di {template.entity.ObjectName} " +
                        $"({NamespaceUtils.GetFileName(template.file)}, modello {template.model}, misure {FormatVector(modelSize)})");
             return result;
         }

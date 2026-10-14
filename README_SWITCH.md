@@ -270,7 +270,11 @@ Dettagli:
   di `L218_ColdHardCrash_FakeCollisionToBeReplaced`, che anche nell'originale Switch non hanno
   modello). Il rapporto dice quale decorazione ha copiato e quanti blocchi ha coperto
   (`pavimento visibile`). Nella v43 la copia era un'entità di gioco con un modello (anche
-  `LevelAssets\Basic\box`) e nel gioco non si vedeva.
+  `LevelAssets\Basic\box`) e nel gioco non si vedeva; nella v44 la decorazione si cercava nei file
+  già convertiti e non se ne trovava nessuna. Dalla v45 si cerca nei file del PC (come li legge
+  l'editor), solo tra quelle il cui modello c'è sulla Switch, e la copia si fa mentre si converte il
+  file dei blocchi. Se non ne trova, il rapporto dice quante entità ha guardato e perché le ha
+  scartate.
 - Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
   materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
   nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi
