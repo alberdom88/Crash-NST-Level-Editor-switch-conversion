@@ -58,7 +58,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
-        [--pavimento-blocchi <file>[=<modello>]]...
+        [--pavimento-blocchi <file>[=<decorazione>]]...
         [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
 ```
 
@@ -258,16 +258,19 @@ Dettagli:
   formato dell'editor (`Levels\Crash2\...\Nome`, senza `models/` e senza `.igz`). Serve a far vedere
   un pavimento fatto solo di blocchi di collisione senza aprire l'editor. Il modello si disegna
   con la sua misura, nel punto dell'entità: per un blocco grande va meglio `--pavimento-blocchi`.
-- `--pavimento-blocchi <testo del file>[=<modello>]` (dalla v43, si può ripetere): per ogni blocco
-  di collisione dei file con il testo nel percorso aggiunge un'entità che si vede, con il modello
-  indicato (senza modello: il blocco di ghiaccio di Crash congelato, `Characters\Playable\Crash\Crash_IceBlock`)
-  ingrandito e spostato perché copra esattamente il blocco, e che non blocca niente (il blocco
-  originale resta com'è). Le misure del modello si leggono dal modello Switch; se non si legge, il
-  rapporto lo dice e i blocchi restano invisibili. Serve per i pavimenti fatti nell'editor con i
-  blocchi di collisione, che l'editor mostra come riquadri rossi ma che nel gioco non si vedono
-  (Level 10: il ghiaccio fatto con i blocchi di `L218_ColdHardCrash_FakeCollisionToBeReplaced`, che
-  anche nell'originale Switch non hanno modello). Le entità aggiunte e i blocchi sono nel rapporto
-  (`pavimento visibile`). Per un blocco semplice al posto del ghiaccio: `=LevelAssets\Basic\box`.
+- `--pavimento-blocchi <testo del file>[=<nome della decorazione>]` (dalla v44, si può ripetere):
+  sui blocchi di collisione dei file con il testo nel percorso mette una copia di una decorazione
+  del livello (un'entità con modello come i muri, le rocce e i pavimenti, che sulla Switch si
+  vedono), ingrandita e spostata perché copra esattamente il blocco, con la collisione spenta (il
+  blocco resta com'è: si cammina e si scivola come prima). Senza nome sceglie da sola, nei file dello
+  stesso livello del file dei blocchi, una decorazione con `Ice` o `Floor` nel nome (per Cold Hard
+  Crash i `CliffFloor`), poi negli altri livelli; con `=<testo>` copia la prima decorazione con quel
+  testo nel nome. Serve per i pavimenti fatti nell'editor con i blocchi di collisione, che l'editor
+  mostra come riquadri rossi ma che nel gioco non si vedono (Level 10: il ghiaccio fatto con i blocchi
+  di `L218_ColdHardCrash_FakeCollisionToBeReplaced`, che anche nell'originale Switch non hanno
+  modello). Il rapporto dice quale decorazione ha copiato e quanti blocchi ha coperto
+  (`pavimento visibile`). Nella v43 la copia era un'entità di gioco con un modello (anche
+  `LevelAssets\Basic\box`) e nel gioco non si vedeva.
 - Dipendenze della grafica (dalla v40): alla fine, dopo `--solo-usati`, per ogni modello e
   materiale preso dagli originali Switch si controlla che i materiali e le texture che usa siano
   nell'archivio o negli archivi comuni del gioco, compresi quelli indicati solo per hash con nomi
