@@ -54,8 +54,9 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
         [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]...
-        [--originale-switch <testo>]... [--tessere-solo-crash1]
+        [--originale-switch <testo>]... [--tessere-solo-crash1] [--tessere-senza-hud]
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
+        [--intro-come-editor] [--intro-scostamento <numero>] [--intro-posizione-originale]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
@@ -196,6 +197,25 @@ Dettagli:
   fuori dal pacchetto no (fino alla v36 bastava una copia di un livello di Crash 3 presa per un
   solo oggetto per non aggiungerla). Nella zone info di un livello di Crash 3 l'intro "magic
   moment" del livello originale viene sempre spenta: accesa, Crash non compare.
+  Dalla v52 l'intro aggiunta (e le entità di Gone Tomorrow a cui rimanda, copiate con lei) si sposta
+  dalla partenza di Gone Tomorrow alla partenza del livello (`PlayerStart`), nella stessa posizione
+  e rotazione rispetto alla partenza: fino alla v51 restava nel punto in cui sta in Gone Tomorrow,
+  che in un altro livello è un punto qualsiasi. Una partenza o un mondo di Gone Tomorrow copiati
+  perché l'intro li nomina si tolgono e l'intro usa quelli del livello. Opzioni per provare, se
+  Crash compare ancora spostato rispetto alla partenza:
+  - `--intro-scostamento <numero>`: lo "Spawn offset" dell'intro (nell'editor, sotto "Crash spawn
+    delay"), per l'intro aggiunta e per quella che il livello ha già; per un livello nuovo
+    l'editor usa 300 (prova per esempio `--intro-scostamento 0`);
+  - `--intro-come-editor`: l'intro aggiunta come la aggiunge l'editor quando passi a Crash 3 un
+    livello che c'è già (valori di Gone Tomorrow, "Animation delay" 0.5) invece che come in un
+    livello nuovo di Crash 3 (evento `Cutscene_Crash2_Portal_Exit_Victory`, 1, 1, 2.45, 300);
+  - `--intro-posizione-originale`: l'intro aggiunta resta dove sta in Gone Tomorrow, come fino
+    alla v51 (per confronto).
+  La sezione `INTRO DI CRASH 3 (analisi)` (dalla v52) dice cosa è stato copiato e spostato, con i
+  valori dell'intro, dove stanno l'intro e le partenze del livello e, per confronto, quelle di
+  alcuni livelli originali di Crash 3 (distanza e posizione rispetto alla partenza). Il file
+  `<rapporto>_intro.txt`, accanto al rapporto, ha tutto questo e gli script dell'intro
+  (`common_C3_IntroSequence`, `common_CutsceneSequencePlayer_c`) scritti per esteso.
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
   esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
   non parte, Crash non compare e non si può muovere.
@@ -329,9 +349,18 @@ Dettagli:
   livello, che NST Pak Manager usa) una copia dello script con quel ramo staccato: il gestore resta
   e conta. Nei livelli senza tessere non fa niente, perché nessuno gli manda i messaggi delle
   tessere. Lo script viene riscritto con le sue dipendenze e riletto per controllo; la sezione
-  `REGISTRAZIONE DEL LIVELLO` lo dice. `--tessere-solo-crash1` lo lascia com'è. L'HUD che mostra le
-  tessere (`ui/crash_hud.igz`) dipende anche da `CrashBandicoot_HUD`, che guarda il gioco: fuori da
-  Crash 1 il contatore sullo schermo può non vedersi, anche se le tessere si contano (il
+  `REGISTRAZIONE DEL LIVELLO` lo dice. `--tessere-solo-crash1` lo lascia com'è.
+  HUD delle tessere (dalla v52): quando prendi qualcosa l'HUD di Crash
+  (`vsc/common/CrashBandicoot_HUD_c.igz`) mostra in alto la riga dei collezionabili, quella di
+  Crash 1 (con le tessere, `ui/crash_hud.igz`) solo se il gioco è Crash 1
+  (`CDebugNodes::debugCheckBuildYear`), negli altri giochi quella di Crash 2 e 3: con
+  `--gioco crash3` le tessere si contavano (v51) ma non si vedevano. Insieme al gestore, la
+  registrazione mette in `update.pak` una copia dell'HUD che fuori da Crash 1, se hai almeno una
+  tessera (un contatore `C1_BonusCount_*` maggiore di 0), mostra la riga di Crash 1 al posto di
+  quella di Crash 2 e 3 (stanno tutte e due in alto: insieme potrebbero coprirsi), e nascondendo
+  nasconde tutte e due. Nei livelli senza tessere i contatori restano a 0 e l'HUD fa quello che
+  faceva; in Crash 1 non cambia niente. Lo script viene riscritto e riletto per controllo.
+  `--tessere-senza-hud` lascia l'HUD com'è (le tessere si contano ma in alto non si vedono; il
   teletrasporto mostra comunque quante ne hai prese).
   La sezione `TESSERE DEI BONUS DI CRASH 1 (analisi)` (dalla v50) elenca i teletrasporti del livello
   e quelli degli originali di Crash 1 per confronto, le tessere per tipo, il gestore nei dati dei

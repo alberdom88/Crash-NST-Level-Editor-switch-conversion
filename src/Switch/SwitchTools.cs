@@ -103,6 +103,17 @@ namespace NST
             // --nuovo: lascia com'e' il gestore delle tessere dei bonus di Crash 1 (Crash1_BonusRoundManager), che fuori da Crash 1
             // si toglie: senza, per un livello con le tessere di un altro gioco va in update.pak una copia che resta (dalla v51)
             public bool TokensOnlyCrash1;
+            // --nuovo: con le tessere fuori da Crash 1 non cambiare l'HUD di Crash (CrashBandicoot_HUD): le tessere si contano ma
+            // in alto non si vedono (dalla v52)
+            public bool TokensNoHud;
+            // converti: l'intro di Crash 3 aggiunta dal convertitore come la aggiunge l'editor quando passi un livello a Crash 3
+            // (valori di Gone Tomorrow, ritardo 0.5) invece che come in un livello nuovo dell'editor (dalla v52)
+            public bool IntroLikeEditor;
+            // converti: "Spawn offset" (_Float_0x4c) dell'intro di Crash 3 del livello, aggiunta o gia' nel livello (dalla v52)
+            public float? IntroSpawnOffset;
+            // converti: l'intro di Crash 3 aggiunta dal convertitore resta dov'e' in Gone Tomorrow, come fino alla v51 (dalla v52
+            // si sposta alla partenza del livello)
+            public bool IntroKeepPosition;
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
             public string Reflections = "auto";
@@ -122,7 +133,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi", "--modello-blocchi", "--pavimento-blocchi",
+            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento",
         ];
 
         public static int Run(string[] args)
@@ -219,6 +230,18 @@ namespace NST
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-occlusioni") { options.KeepOcclusion = true; rest.RemoveAt(i); }
                 else if (name == "--tessere-solo-crash1") { options.TokensOnlyCrash1 = true; rest.RemoveAt(i); }
+                else if (name == "--tessere-senza-hud") { options.TokensNoHud = true; rest.RemoveAt(i); }
+                else if (name == "--intro-come-editor") { options.IntroLikeEditor = true; rest.RemoveAt(i); }
+                else if (name == "--intro-posizione-originale") { options.IntroKeepPosition = true; rest.RemoveAt(i); }
+                else if (name == "--intro-scostamento" && hasValue)
+                {
+                    if (float.TryParse(rest[i + 1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
+                                       System.Globalization.CultureInfo.InvariantCulture, out float offset))
+                        options.IntroSpawnOffset = offset;
+                    else
+                        options.Errors.Add($"--intro-scostamento {rest[i + 1]}: serve un numero (per esempio 0 o 300)");
+                    rest.RemoveRange(i, 2);
+                }
                 else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--pavimento-blocchi" && hasValue)
                 {
@@ -267,7 +290,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-posizione-originale] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2140,6 +2163,8 @@ namespace NST
             var occlusionInfos = new List<OcclusionInfo>();  // occlusioni dei file convertiti, prima di spegnerle (rapporto)
             var placedEntities = new List<PlacedEntity>();  // decorazioni, blocchi e oggetti con un modello (rapporto)
             (float x, float y, float z)? playerStart = null;  // partenza del livello (rapporto)
+            var introLines = new List<string>();               // intro di Crash 3: aggiunta, cambiata (rapporto)
+            bool introAdded = false;
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
             var modifiedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2436,6 +2461,17 @@ namespace NST
                         // l'ha gia' lo dice levelHasC3Intro, calcolato prima della conversione
                         bool hasIntro = igz.Objects.OfType<igEntity>().Any(e => e.GetComponent<common_C3_IntroSequenceData>() != null);
 
+                        // --intro-scostamento: "Spawn offset" anche dell'intro che il livello ha gia'
+                        if (hasIntro && !options.WithoutIntro && options.IntroSpawnOffset != null)
+                        {
+                            foreach (common_C3_IntroSequenceData data in igz.Objects.OfType<common_C3_IntroSequenceData>())
+                            {
+                                introLines.Add($"intro gia' nel livello ({target}): Spawn offset {FormatFloat(data._Float_0x4c)} -> " +
+                                               $"{FormatFloat(options.IntroSpawnOffset.Value)} (--intro-scostamento)");
+                                data._Float_0x4c = options.IntroSpawnOffset.Value;
+                            }
+                        }
+
                         // --senza-intro: toglie quell'intro
                         if (options.WithoutIntro && hasIntro)
                         {
@@ -2695,10 +2731,15 @@ namespace NST
                         {
                             try
                             {
-                                List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, out string introInfo);
+                                var introDetails = new List<string>();
+                                List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, options.IntroLikeEditor, options.IntroKeepPosition,
+                                                                            options.IntroSpawnOffset, out string introInfo, introDetails);
                                 levelHasC3Intro = true;
+                                introAdded = true;
                                 Increment(counters, "intro di Crash 3 aggiunta");
                                 lines.Add($"intro di Crash 3 aggiunta a {target}: {introInfo}");
+                                introLines.Add($"intro aggiunta a {target} (copiata da Gone Tomorrow, L321_GoneTomorrow Switch):");
+                                foreach (string detail in introDetails) introLines.Add("  " + detail);
                                 foreach (IgArchiveFile dependency in introFiles)
                                 {
                                     // un file che c'e' anche nell'archivio PC si converte dal PC, come gli altri
@@ -2711,6 +2752,7 @@ namespace NST
                             {
                                 Increment(counters, "errori");
                                 lines.Add($"ERRORE aggiungendo l'intro di Crash 3: {e.GetType().Name}: {e.Message}");
+                                introLines.Add($"ERRORE aggiungendo l'intro a {target}: {e.GetType().Name}: {e.Message}");
                             }
                         }
 
@@ -3335,7 +3377,7 @@ namespace NST
                 {
                     registered = BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
                                                    options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode,
-                                                   planarReflections, reflectionsReason, crash1Tokens, options.TokensOnlyCrash1);
+                                                   planarReflections, reflectionsReason, crash1Tokens, options.TokensOnlyCrash1, options.TokensNoHud);
                 }
                 catch (Exception registrationError)
                 {
@@ -3452,6 +3494,38 @@ namespace NST
                 report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
                 report.AppendLine();
             }
+            // Intro di Crash 3: dove fa comparire Crash rispetto alla partenza, dettagli in <rapporto>_intro.txt
+            string? introPath = null;
+            bool introOptions = options.IntroLikeEditor || options.IntroKeepPosition || options.IntroSpawnOffset != null;
+            if (options.WithoutIntro)
+            {
+                if (introOptions)
+                {
+                    report.AppendLine("=== INTRO DI CRASH 3 ===");
+                    report.AppendLine("  --intro-come-editor, --intro-scostamento e --intro-posizione-originale ignorate: c'e' --senza-intro");
+                    report.AppendLine();
+                }
+            }
+            else if (levelHasC3Intro || introOptions)
+            {
+                if (!introAdded && (options.IntroLikeEditor || options.IntroKeepPosition))
+                    introLines.Add("--intro-come-editor e --intro-posizione-originale valgono solo per l'intro aggiunta dal convertitore: " +
+                                   (levelHasC3Intro ? "il livello ce l'aveva gia', resta com'e'" : "qui non e' stata aggiunta (serve --gioco crash3 o --aggiungi-intro)"));
+                if (options.IntroSpawnOffset != null && !levelHasC3Intro)
+                    introLines.Add("--intro-scostamento ignorata: il livello non ha l'intro di Crash 3");
+                try
+                {
+                    Console.WriteLine("Controllo l'intro di Crash 3...");
+                    introPath = AppendC3IntroAnalysis(report, output, sw, reportPath, introLines);
+                }
+                catch (Exception e)
+                {
+                    report.AppendLine("=== INTRO DI CRASH 3 (analisi) ===");
+                    foreach (string line in introLines) report.AppendLine("  " + line);
+                    report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                    report.AppendLine();
+                }
+            }
             if (unreadableFiles.Count > 0)
             {
                 report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
@@ -3536,6 +3610,7 @@ namespace NST
             if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
             else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
             if (tokensPath != null) Console.WriteLine($"Analisi delle tessere dei bonus scritta in {tokensPath}: allegala insieme al rapporto");
+            if (introPath != null) Console.WriteLine($"Analisi dell'intro di Crash 3 scritta in {introPath}: allegala insieme al rapporto");
             if (nameWarning != null) Console.WriteLine(nameWarning);
             if (missingReferences.Count > 0)
             {
@@ -3618,7 +3693,8 @@ namespace NST
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
                                               bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
                                               CZoneInfo? poolSource, string? poolFrom, bool editorMode,
-                                              bool? planarReflections, string reflectionsReason, bool crash1Tokens, bool tokensOnlyCrash1)
+                                              bool? planarReflections, string reflectionsReason, bool crash1Tokens, bool tokensOnlyCrash1,
+                                              bool tokensNoHud)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -3825,8 +3901,11 @@ namespace NST
                 else if (tokensOnlyCrash1)
                     report.AppendLine($"  tessere dei bonus di Crash 1: --tessere-solo-crash1, il gestore resta com'e' (nel gioco {levelYear?.ToString() ?? "?"} " +
                                       "si toglie: le tessere non si contano)");
-                else
-                    PatchBonusTokenManager(sw, update, embedded, report, levelYear);
+                else if (PatchBonusTokenManager(sw, update, embedded, report, levelYear))
+                {
+                    if (tokensNoHud) report.AppendLine("  HUD delle tessere: --tessere-senza-hud, le tessere prese non si vedono in alto (si contano)");
+                    else PatchBonusTokenHud(sw, update, embedded, report);
+                }
             }
 
             // File del pacchetto di chunkInfos: la versione di update.pak, se c'e', altrimenti quella di chunkInfos.pak
@@ -3868,10 +3947,17 @@ namespace NST
 
         /// <summary>
         /// Copia nel file principale del livello l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer di
-        /// L321_GoneTomorrow, dal dump Switch) con le stesse impostazioni che usa l'editor per un livello nuovo.
-        /// Restituisce i file di Gone Tomorrow che servono all'intro (script, comportamenti, ...).
+        /// L321_GoneTomorrow, dal dump Switch). Impostazioni: come l'editor per un livello nuovo di Crash 3 (LevelBuilder),
+        /// oppure, con likeEditor, come l'editor quando passi a Crash 3 un livello che c'e' gia' (GameplayModeManager.
+        /// AddC3IntroCutscene: valori di Gone Tomorrow, Animation delay 0.5); spawnOffset cambia lo "Spawn offset". Le entita'
+        /// copiate (l'intro e quelle del file di Gone Tomorrow a cui rimanda) passano dalla partenza di Gone Tomorrow a quella del
+        /// livello, nella stessa posizione rispetto alla partenza (con keepPosition restano dove sono in Gone Tomorrow, come fino
+        /// alla v51: in un altro livello sono in un punto qualsiasi). Una partenza o un mondo di Gone Tomorrow copiati perche'
+        /// l'intro li nomina si tolgono e l'intro usa quelli del livello. Restituisce i file di Gone Tomorrow che servono
+        /// all'intro (script, comportamenti, ...); in details le righe per il rapporto
         /// </summary>
-        private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, out string info)
+        private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, bool likeEditor, bool keepPosition,
+                                                      float? spawnOffset, out string info, List<string> details)
         {
             string pakPath = PakFiles(switchDir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals("l321_gonetomorrow", StringComparison.OrdinalIgnoreCase))
                              ?? throw new FileNotFoundException("l321_gonetomorrow.pak non trovato nel dump Switch");
@@ -3884,24 +3970,233 @@ namespace NST
                             ?? throw new InvalidDataException("IntroCutsceneSequencePlayer non trovato in " + sourceFile.Path);
             common_C3_IntroSequenceData introData = intro.GetComponent<common_C3_IntroSequenceData>()
                             ?? throw new InvalidDataException("IntroCutsceneSequencePlayer senza common_C3_IntroSequenceData");
+            common_CutsceneSequencePlayerData? player = intro.GetComponent<common_CutsceneSequencePlayerData>();
 
-            // Come LevelBuilder.CreateNewLevel per un livello nuovo di Crash 3
-            introData._BehaviorEventCrashIntro = "Cutscene_Crash2_Portal_Exit_Victory";
-            introData._Float_0x30 = 1.0f;
-            introData._Float_0x34 = 1.0f;
-            introData._Float_0x40 = 2.45f;
-            introData._Float_0x4c = 300;
-            CEntityHandleList? shots = sourceIgz.FindObject<CEntityHandleList>("IntroCutsceneSequencePlayer_entityData_componentData_CommonCutsceneSequencePlayer_CutsceneSequenceShotList001");
-            if (shots != null) shots._data.Clear();
-            else if (intro.GetComponent<common_CutsceneSequencePlayerData>() is common_CutsceneSequencePlayerData player)
-                player._CutsceneSequenceShotList.Reference = null;
+            // Partenze prima della copia: quella di Gone Tomorrow piu' vicina all'intro e quella del livello
+            CPlayerStartEntity? sourceStart = MainPlayerStart(sourceIgz, intro);
+            CPlayerStartEntity? destStart = MainPlayerStart(destIgz, null);
+            details.Add($"in Gone Tomorrow: {intro.ObjectName} {PlaceText(intro)}" +
+                        (sourceStart != null ? $", rispetto alla partenza {sourceStart.ObjectName}: {RelativeText(sourceStart, intro)}" : ", partenza non trovata"));
+            details.Add($"  {IntroValuesText(introData)}");
+            details.Add($"  riferimenti: {IntroRefsText(introData)}");
+            if (player != null) details.Add($"  sequenza: {CutscenePlayerText(player)}");
 
+            string settings;
+            if (likeEditor)
+            {
+                // Come GameplayModeManager.AddC3IntroCutscene: livello che c'e' gia' passato a Crash 3 nell'editor
+                introData._Float_0x30 = 0.5f;
+                if (player != null) player._CutsceneSequenceShotList.Reference = null;
+                settings = "come l'editor quando passi a Crash 3 un livello che c'e' gia' (--intro-come-editor: valori di Gone Tomorrow, Animation delay 0.5)";
+            }
+            else
+            {
+                // Come LevelBuilder.CreateNewLevel per un livello nuovo di Crash 3
+                introData._BehaviorEventCrashIntro = "Cutscene_Crash2_Portal_Exit_Victory";
+                introData._Float_0x30 = 1.0f;
+                introData._Float_0x34 = 1.0f;
+                introData._Float_0x40 = 2.45f;
+                introData._Float_0x4c = 300;
+                CEntityHandleList? shots = sourceIgz.FindObject<CEntityHandleList>("IntroCutsceneSequencePlayer_entityData_componentData_CommonCutsceneSequencePlayer_CutsceneSequenceShotList001");
+                if (shots != null) shots._data.Clear();
+                else if (player != null) player._CutsceneSequenceShotList.Reference = null;
+                settings = "come l'editor per un livello nuovo di Crash 3";
+            }
+            if (spawnOffset != null)
+            {
+                introData._Float_0x4c = spawnOffset.Value;
+                settings += $", Spawn offset {FormatFloat(spawnOffset.Value)} (--intro-scostamento)";
+            }
+            details.Add($"impostazioni: {settings}");
+            details.Add($"  {IntroValuesText(introData)}");
+
+            var before = new HashSet<igObject>(destIgz.Objects, ReferenceEqualityComparer.Instance);
             IgzFile.Clone(intro, source, output, sourceIgz, destIgz, out List<IgArchiveFile> dependencies);
             // il file principale di Gone Tomorrow no: porterebbe nel livello tutte le sue entita'
             dependencies.RemoveAll(d => d.Path.Equals(sourceFile.Path, StringComparison.OrdinalIgnoreCase));
+            List<igObject> addedObjects = destIgz.Objects.Where(o => !before.Contains(o)).ToList();
+            List<igEntity> added = addedObjects.OfType<igEntity>().ToList();
+            details.Add($"copiati da Gone Tomorrow: {addedObjects.Count} oggetti, {added.Count} entita'");
+
+            // Partenza o mondo di Gone Tomorrow copiati perche' l'intro li nomina: due partenze o due mondi nello stesso livello
+            // non vanno, si usano quelli del livello
+            string destNamespace = destIgz.GetName(false);
+            var removed = new HashSet<igObject>(ReferenceEqualityComparer.Instance);
+            foreach (igEntity copy in added.Where(e => e is CPlayerStartEntity || e is CWorldEntity).ToList())
+            {
+                igEntity? own = copy is CPlayerStartEntity ? destStart : before.OfType<CWorldEntity>().FirstOrDefault();
+                if (own?.ObjectName == null || copy.ObjectName == null)
+                {
+                    details.Add($"  {EntityText(copy)} di Gone Tomorrow (l'intro la nomina): lasciata, nel livello non ce n'e' una da usare al suo posto");
+                    continue;
+                }
+                int redirected = 0;
+                foreach (igObject holder in addedObjects.Where(o => !ReferenceEquals(o, copy) && !removed.Contains(o)))
+                {
+                    foreach (NamedReference reference in holder.GetHandles(destIgz.GameVersion))
+                    {
+                        if (reference.objectName != copy.ObjectName || reference.namespaceName == null ||
+                            !reference.namespaceName.Equals(destNamespace, StringComparison.OrdinalIgnoreCase)) continue;
+                        reference.objectName = own.ObjectName;
+                        redirected++;
+                    }
+                }
+                foreach (igObject gone in destIgz.Remove(copy)) removed.Add(gone);
+                details.Add($"  {EntityText(copy)} di Gone Tomorrow (l'intro la nomina): tolta, {redirected} riferimenti passati a {own.ObjectName} del livello");
+            }
+            added.RemoveAll(e => removed.Contains(e));
+
+            // Entita' copiate: dalla partenza di Gone Tomorrow a quella del livello
+            if (keepPosition)
+            {
+                details.Add("posizione: come in Gone Tomorrow (--intro-posizione-originale)");
+                foreach (igEntity entity in added) details.Add($"  {EntityText(entity)}: {PlaceText(entity)}");
+            }
+            else if (sourceStart == null || destStart == null)
+            {
+                details.Add($"posizione: come in Gone Tomorrow (partenza {(sourceStart == null ? "di Gone Tomorrow" : "del livello")} non trovata nel file principale)");
+                foreach (igEntity entity in added) details.Add($"  {EntityText(entity)}: {PlaceText(entity)}");
+            }
+            else
+            {
+                details.Add($"posizione: dalla partenza di Gone Tomorrow {sourceStart.ObjectName} ({PlaceText(sourceStart)}) a quella del livello " +
+                            $"{destStart.ObjectName} ({PlaceText(destStart)}), stessa posizione rispetto alla partenza");
+                float[] relative = MultiplyMatrices(RotationMatrix(destStart._transform?._parentSpaceRotation),
+                                                    TransposeMatrix(RotationMatrix(sourceStart._transform?._parentSpaceRotation)));
+                igVec3fMetaField sourcePosition = sourceStart._parentSpacePosition, destPosition = destStart._parentSpacePosition;
+                foreach (igEntity entity in added)
+                {
+                    if (entity._bolt != null)
+                    {
+                        details.Add($"  {EntityText(entity)}: attaccata a un'altra entita', resta {PlaceText(entity)}");
+                        continue;
+                    }
+                    string old = PlaceText(entity);
+                    igVec3fMetaField position = entity._parentSpacePosition;
+                    float[] offset = MultiplyVector(relative, [position._x - sourcePosition._x, position._y - sourcePosition._y, position._z - sourcePosition._z]);
+                    entity._parentSpacePosition = new igVec3fMetaField(destPosition._x + offset[0], destPosition._y + offset[1], destPosition._z + offset[2]);
+                    if (entity._transform != null)
+                        entity._transform._parentSpaceRotation = EulerFromMatrix(MultiplyMatrices(relative, RotationMatrix(entity._transform._parentSpaceRotation)));
+                    details.Add($"  {EntityText(entity)}: {old} -> {PlaceText(entity)}");
+                }
+            }
+
             info = $"da {sourceFile.Path}, {dependencies.Count} file collegati";
             return dependencies;
         }
+
+        /// <summary>
+        /// Partenza del livello in un file: le CPlayerStartEntity con _zoneStart (se nessuna lo ha, tutte); se sono piu' d'una,
+        /// la piu' vicina a near, altrimenti la prima
+        /// </summary>
+        private static CPlayerStartEntity? MainPlayerStart(IgzFile igz, igEntity? near)
+        {
+            List<CPlayerStartEntity> starts = igz.Objects.OfType<CPlayerStartEntity>().ToList();
+            List<CPlayerStartEntity> zoneStarts = starts.Where(s => s._zoneStart).ToList();
+            if (zoneStarts.Count > 0) starts = zoneStarts;
+            if (starts.Count <= 1 || near == null) return starts.FirstOrDefault();
+            return starts.OrderBy(s => EntityDistance(s, near)).First();
+        }
+
+        private static float EntityDistance(igEntity a, igEntity b)
+        {
+            float dx = a._parentSpacePosition._x - b._parentSpacePosition._x;
+            float dy = a._parentSpacePosition._y - b._parentSpacePosition._y;
+            float dz = a._parentSpacePosition._z - b._parentSpacePosition._z;
+            return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        /// <summary>
+        /// Rotazione di un'entita' (_parentSpaceRotation: radianti, ordine ZYX come nell'editor) come matrice 3x3 per righe
+        /// </summary>
+        private static float[] RotationMatrix(igVec3fMetaField? euler)
+        {
+            float x = euler?._x ?? 0f, y = euler?._y ?? 0f, z = euler?._z ?? 0f;
+            float cx = MathF.Cos(x), sx = MathF.Sin(x), cy = MathF.Cos(y), sy = MathF.Sin(y), cz = MathF.Cos(z), sz = MathF.Sin(z);
+            // Rz * Ry * Rx
+            return
+            [
+                cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+                sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+                -sy,     cy * sx,                cy * cx,
+            ];
+        }
+
+        /// <summary>
+        /// Angoli (radianti, ordine ZYX come nell'editor) di una matrice di rotazione 3x3 per righe
+        /// </summary>
+        private static igVec3fMetaField EulerFromMatrix(float[] m)
+        {
+            float y = MathF.Asin(-Math.Clamp(m[6], -1f, 1f));
+            if (MathF.Abs(m[6]) < 0.9999999f) return new igVec3fMetaField(MathF.Atan2(m[7], m[8]), y, MathF.Atan2(m[3], m[0]));
+            return new igVec3fMetaField(0f, y, MathF.Atan2(-m[1], m[4]));
+        }
+
+        private static float[] MultiplyMatrices(float[] a, float[] b)
+        {
+            var result = new float[9];
+            for (int row = 0; row < 3; row++)
+                for (int column = 0; column < 3; column++)
+                    result[row * 3 + column] = a[row * 3] * b[column] + a[row * 3 + 1] * b[3 + column] + a[row * 3 + 2] * b[6 + column];
+            return result;
+        }
+
+        private static float[] TransposeMatrix(float[] m) => [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]];
+
+        private static float[] MultiplyVector(float[] m, float[] v) =>
+        [
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+            m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+            m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
+        ];
+
+        private static string EntityText(igEntity entity) => $"{entity.ObjectName ?? "?"} [{entity.GetType().Name}]";
+
+        /// <summary>
+        /// Posizione e rotazione (in gradi) di un'entita' per il rapporto
+        /// </summary>
+        private static string PlaceText(igEntity entity)
+        {
+            igVec3fMetaField p = entity._parentSpacePosition;
+            string text = $"posizione {FormatFloat(p._x)} {FormatFloat(p._y)} {FormatFloat(p._z)}";
+            igVec3fMetaField? r = entity._transform?._parentSpaceRotation;
+            if (r != null && (r._x != 0 || r._y != 0 || r._z != 0))
+                text += $", rotazione {FormatFloat(r._x * 180f / MathF.PI)} {FormatFloat(r._y * 180f / MathF.PI)} {FormatFloat(r._z * 180f / MathF.PI)} gradi";
+            return text;
+        }
+
+        /// <summary>
+        /// Dove sta un'entita' rispetto a una partenza: distanza, posizione nel sistema della partenza (assi della partenza
+        /// ruotata), rotazione rispetto alla partenza (gradi)
+        /// </summary>
+        private static string RelativeText(igEntity start, igEntity entity)
+        {
+            float[] startRotation = TransposeMatrix(RotationMatrix(start._transform?._parentSpaceRotation));
+            igVec3fMetaField a = start._parentSpacePosition, b = entity._parentSpacePosition;
+            float[] local = MultiplyVector(startRotation, [b._x - a._x, b._y - a._y, b._z - a._z]);
+            igVec3fMetaField rotation = EulerFromMatrix(MultiplyMatrices(startRotation, RotationMatrix(entity._transform?._parentSpaceRotation)));
+            return $"distanza {FormatFloat(EntityDistance(start, entity))}, nel sistema della partenza {FormatFloat(local[0])} {FormatFloat(local[1])} {FormatFloat(local[2])}, " +
+                   $"rotazione {FormatFloat(rotation._x * 180f / MathF.PI)} {FormatFloat(rotation._y * 180f / MathF.PI)} {FormatFloat(rotation._z * 180f / MathF.PI)} gradi";
+        }
+
+        /// <summary>
+        /// Valori dell'intro di Crash 3 (common_C3_IntroSequenceData) con i nomi dell'editor
+        /// </summary>
+        private static string IntroValuesText(common_C3_IntroSequenceData d) =>
+            $"evento '{d._BehaviorEventCrashIntro}', Animation delay {FormatFloat(d._Float_0x30)}, Crash spawn delay {FormatFloat(d._Float_0x34)}, " +
+            $"Animation duration {FormatFloat(d._Float_0x40)}, Animation offset {FormatFloat(d._Float_0x48)}, Spawn offset {FormatFloat(d._Float_0x4c)}, " +
+            $"Animation size {FormatFloat(d._Float_0x78)}, Bool {(d._Bool ? "si'" : "no")}, Float_0x58 {FormatFloat(d._Float_0x58)}, Float_0x5c {FormatFloat(d._Float_0x5c)}";
+
+        private static string IntroRefsText(common_C3_IntroSequenceData d) =>
+            $"effetto {HandleText(d._Vfx_Effect)}, Entity_0x50 {HandleText(d._Entity_0x50)}, camera {HandleText(d._Camera_Base)}, " +
+            $"variabile {HandleText(d._Game_Int_Variable)}, Entity_0x70 {HandleText(d._Entity_0x70)}";
+
+        private static string CutscenePlayerText(common_CutsceneSequencePlayerData p) =>
+            $"parte all'avvio {(p._IsPlayOnStart ? "si'" : "no")}, checkpoint di partenza {HandleText(p._Starting_Checkpoint)} " +
+            $"(escluso {(p._ExcludeStartingCheckpoint ? "si'" : "no")}), inquadrature {HandleText(p._CutsceneSequenceShotList)}, " +
+            $"preset {HandleText(p._CutscenePreset)}, dissolvenza {HandleText(p._FadeInPreset)}, salto {(p._IsSkipFadeOn ? "si'" : "no")} " +
+            $"{HandleText(p._SkipFadePreset)}, uscita della camera {FormatFloat(p._OnCutsceneDoneCameraBlendOutTime)}, suono {HandleText(p._Sound)}, " +
+            $"id {HandleText(p._DesignCutsceneIdentifier)}";
 
         /// <summary>
         /// Riporta nella zone info presa da un originale la modalita' impostata nell'editor: personaggio (Coco), opzioni
@@ -5445,6 +5740,405 @@ namespace NST
             }
         }
 
+        /// <summary>
+        /// Script VSC del dump Switch dal nome del file (vsc/..., senza estensione)
+        /// </summary>
+        private static IgArchiveFile? FindVscFile(ArchiveIndex sw, string name) =>
+            sw.ByPath.Where(e => e.Key.StartsWith("vsc/") && NamespaceUtils.GetFileName(e.Key, false).Equals(name, StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => e.Value).FirstOrDefault();
+
+        /// <summary>
+        /// Nome di un tipo del gioco usato da un nodo VSC (messaggio, evento)
+        /// </summary>
+        private static string MetaName(igMetaObject? meta) =>
+            meta == null ? "" : meta._name ?? meta.Reference?.objectName ?? meta.ObjectName ?? "";
+
+        /// <summary>
+        /// Contatori delle tessere (C1_BonusCount_Tawna, _Brio, _Cortex) come li usa il gestore delle tessere nei dati di Crash;
+        /// se non si leggono, i nomi conosciuti in gamevariables
+        /// </summary>
+        private static List<NamedReference> TokenCounters(ArchiveIndex sw)
+        {
+            foreach (var (path, file) in sw.ByPath.Where(e => e.Key.EndsWith("crash_characterdata.igz")).OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                try
+                {
+                    Crash_BonusRoundManagerData? manager = file.ToIgzFile().Objects.OfType<Crash_BonusRoundManagerData>().FirstOrDefault();
+                    if (manager == null) continue;
+                    var counters = new List<NamedReference>();
+                    foreach (igHandleMetaField handle in new[] { manager._Game_Int_Variable_0x60, manager._Game_Int_Variable_0x68, manager._Game_Int_Variable_0x70 })
+                        if (handle.Reference != null && handle.Reference.objectName.StartsWith("C1_BonusCount", StringComparison.OrdinalIgnoreCase))
+                            counters.Add(handle.Reference.Clone());
+                    if (counters.Count == 3) return counters;
+                }
+                catch
+                {
+                    // si usano i nomi conosciuti
+                }
+            }
+            return
+            [
+                new NamedReference("gamevariables", "C1_BonusCount_Tawna"),
+                new NamedReference("gamevariables", "C1_BonusCount_Brio"),
+                new NamedReference("gamevariables", "C1_BonusCount_Cortex"),
+            ];
+        }
+
+        /// <summary>
+        /// HUD di Crash (vsc/common/CrashBandicoot_HUD_c.igz, componente di Crash e Coco). Quando prendi qualcosa mostra in alto la
+        /// riga dei collezionabili: quella di Crash 1, con le tessere (evento dell'HUD gk33u62b), solo se il gioco e' Crash 1
+        /// (CDebugNodes::debugCheckBuildYear 7), negli altri giochi quella di Crash 2 e 3 (civ7ec21: gemme, cristalli). Nella copia
+        /// per update.pak, fuori da Crash 1, se c'e' almeno una tessera presa (C1_BonusCount_Tawna, _Brio o _Cortex maggiore di 0) si
+        /// mostra la riga di Crash 1 al posto di quella di Crash 2 e 3 (stanno tutte e due in alto: insieme potrebbero coprirsi), e
+        /// nascondendo si nascondono tutte e due (qfcoru5s, 9rlqk1cy). Nei livelli di Crash 2 e 3 senza tessere i contatori restano a 0
+        /// e l'HUD fa quello che faceva; in Crash 1 non cambia niente. Gli accessori nuovi prendono le opzioni (_isHandle) da quelli
+        /// dello stesso tipo nel file. Lo script si riscrive con le sue dipendenze (piu' GameVariables) e si controlla rileggendolo
+        /// </summary>
+        private static bool PatchBonusTokenHud(ArchiveIndex sw, IgArchive update, List<(string path, byte[] data)> embedded, StringBuilder report)
+        {
+            IgArchiveFile? source = FindVscFile(sw, "crashbandicoot_hud_c");
+            if (source == null)
+            {
+                report.AppendLine("  ERRORE HUD delle tessere: CrashBandicoot_HUD_c.igz non trovato nel dump, le tessere prese non si vedono in alto");
+                return false;
+            }
+            static igVscCppActionNode? YearCheck(IgzFile file, string delegatorName)
+            {
+                igVscDelegator? delegator = file.Objects.OfType<igVscDelegator>().FirstOrDefault(d => d.ObjectName == delegatorName);
+                igVscEntryPointNode? entry = delegator?._method?._nodes?._data.FirstOrDefault(n => n != null);
+                return entry?._node is igVscCppActionNode check &&
+                       FunctionName(check._metaFunction).Contains("debugCheckBuildYear", StringComparison.OrdinalIgnoreCase) ? check : null;
+            }
+            static bool SendsEvents(igVscCppActionNode? check, string first, string second) =>
+                check?._outNodes != null && check._outNodes._data.Count == 2 &&
+                check._outNodes._data[0] is igGuiVscSendEventNode a && MetaName(a._messageMetaObject).EndsWith(first, StringComparison.OrdinalIgnoreCase) &&
+                check._outNodes._data[1] is igGuiVscSendEventNode b && MetaName(b._messageMetaObject).EndsWith(second, StringComparison.OrdinalIgnoreCase);
+            static bool CountsTokens(igObject? node) =>
+                node is igVscCompareIntNode compare && compare._a is igVscIndirectIntPropertyAccessor property &&
+                property._object is igVscConstObjectAccessor counter &&
+                counter._value.Reference?.objectName.StartsWith("C1_BonusCount", StringComparison.OrdinalIgnoreCase) == true;
+            try
+            {
+                byte[] original = source.Uncompress();
+                IgzFile igz = new IgzFile(source.Path, original, source.GameVersion);
+                int objects = igz.Objects.Count;
+                igVscCppActionNode? show = YearCheck(igz, "GraphEventListener_ShowBonus");
+                igVscCppActionNode? hide = YearCheck(igz, "GraphEventListener_HideBonus");
+                if (show == null || hide == null || !SendsEvents(show, "gk33u62b", "civ7ec21") || !SendsEvents(hide, "qfcoru5s", "9rlqk1cy"))
+                {
+                    report.AppendLine($"  ERRORE HUD delle tessere: in {source.Path} i controlli del gioco per mostrare e nascondere la riga dei " +
+                                      "collezionabili non sono quelli conosciuti: non cambiato, le tessere prese non si vedono in alto");
+                    return false;
+                }
+                igVscIndirectIntPropertyAccessor? sample = igz.Objects.OfType<igVscIndirectIntPropertyAccessor>()
+                    .FirstOrDefault(a => FunctionName(a._get).Contains("CGameIntVariable::get_Value", StringComparison.OrdinalIgnoreCase) && a._set != null);
+                if (sample == null)
+                {
+                    report.AppendLine($"  ERRORE HUD delle tessere: in {source.Path} non c'e' una lettura di variabile intera da copiare: non cambiato");
+                    return false;
+                }
+
+                // opzioni degli accessori come quelli dello stesso tipo nel file (un riferimento costante a un oggetto, un numero)
+                igVscConstObjectAccessor? constSample = igz.Objects.OfType<igVscConstObjectAccessor>().FirstOrDefault(a => a._value.Reference != null);
+                igVscConstIntAccessor? intSample = igz.Objects.OfType<igVscConstIntAccessor>().FirstOrDefault();
+
+                List<NamedReference> counters = TokenCounters(sw);
+                MemoryPool pool = show.MemoryPool;
+                var showOuts = show._outNodes!._data;
+                var hideOuts = hide._outNodes!._data;
+                igVscActionNode c1Show = showOuts[0], otherShow = showOuts[1], c1Hide = hideOuts[0], otherHide = hideOuts[1];
+
+                // tessere > 0 (Tawna, altrimenti Brio, altrimenti Cortex): riga di Crash 1; nessuna: riga di Crash 2 e 3, come prima
+                igVscActionNode chain = otherShow;
+                for (int i = counters.Count - 1; i >= 0; i--)
+                {
+                    var compare = new igVscCompareIntNode
+                    {
+                        ObjectName = igz.FindSuitableName("Compare_" + counters[i].objectName + "_conv"),
+                        MemoryPool = pool,
+                        _a = new igVscIndirectIntPropertyAccessor
+                        {
+                            MemoryPool = pool,
+                            _isHandle = sample._isHandle,
+                            _isDelegatorTarget = sample._isDelegatorTarget,
+                            _object = new igVscConstObjectAccessor
+                            {
+                                MemoryPool = pool,
+                                _isHandle = constSample?._isHandle ?? false,
+                                _isDelegatorTarget = constSample?._isDelegatorTarget ?? false,
+                                _value = new igHandleMetaField { Reference = counters[i].Clone() },
+                            },
+                            _get = sample._get,
+                            _set = sample._set,
+                        },
+                        _b = new igVscConstIntAccessor
+                        {
+                            MemoryPool = pool,
+                            _isHandle = intSample?._isHandle ?? false,
+                            _isDelegatorTarget = intSample?._isDelegatorTarget ?? false,
+                            _value = 0,
+                        },
+                        _greaterThan = c1Show,
+                        _lessThanOrEqualTo = chain,
+                    };
+                    igz.Objects.Add(compare);
+                    chain = compare;
+                }
+                var hideSequence = new igVscSequenceNode
+                {
+                    ObjectName = igz.FindSuitableName("Sequence_HideBonus_C1Tokens_conv"),
+                    MemoryPool = pool,
+                    _out1 = otherHide,
+                    _out2 = c1Hide,
+                };
+                igz.Objects.Add(hideSequence);
+                showOuts[1] = chain;
+                hideOuts[1] = hideSequence;
+
+                // GameVariables tra le dipendenze, come negli script che usano le variabili del gioco (il gestore delle tessere)
+                IgArchiveFile? managerFile = FindVscFile(sw, "crash1_bonusroundmanager_c");
+                if (managerFile != null && !igz.Dependencies.Any(d => d.path != null && d.path.Contains("GameVariables", StringComparison.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        var managerIgz = new IgzFile(managerFile.Path, managerFile.Uncompress(), managerFile.GameVersion);
+                        foreach (TDEP_Fixup.TDEP_Item item in managerIgz.Dependencies.Where(d => d.path != null && d.path.Contains("GameVariables", StringComparison.OrdinalIgnoreCase)))
+                            igz.Dependencies.Add(item);
+                    }
+                    catch
+                    {
+                        // senza: GameVariables e' comunque caricato all'avvio (permanent)
+                    }
+                }
+
+                igz.GameVersion = GameVersion.NSX;
+                byte[] data = igz.Save(includeDependencies: true);
+
+                // Controllo: rileggendo, fuori da Crash 1 si controllano le tessere (riga di Crash 1 se ce n'e' una, poi quella di
+                // Crash 2 e 3)
+                static bool ShowChainOk(igVscActionNode? node, int expected)
+                {
+                    int found = 0;
+                    while (node is igVscCompareIntNode compare && CountsTokens(compare))
+                    {
+                        if (compare._greaterThan is not igGuiVscSendEventNode) return false;
+                        found++;
+                        node = compare._lessThanOrEqualTo;
+                    }
+                    return found == expected && node is igGuiVscSendEventNode;
+                }
+                var again = new IgzFile(source.Path, data, GameVersion.NSX);
+                igVscCppActionNode? showAgain = YearCheck(again, "GraphEventListener_ShowBonus");
+                igVscCppActionNode? hideAgain = YearCheck(again, "GraphEventListener_HideBonus");
+                bool showOk = showAgain?._outNodes != null && showAgain._outNodes._data.Count == 2 &&
+                              showAgain._outNodes._data[0] is igGuiVscSendEventNode &&
+                              ShowChainOk(showAgain._outNodes._data[1], counters.Count);
+                bool hideOk = hideAgain?._outNodes != null && hideAgain._outNodes._data.Count == 2 &&
+                              hideAgain._outNodes._data[1] is igVscSequenceNode newHide && newHide._out1 is igGuiVscSendEventNode &&
+                              newHide._out2 is igGuiVscSendEventNode;
+                int countChecks = again.Objects.Count(o => CountsTokens(o));
+                if (!showOk || !hideOk || countChecks != counters.Count ||
+                    again.Objects.OfType<igVscMetaObject>().Count() != igz.Objects.OfType<igVscMetaObject>().Count())
+                {
+                    report.AppendLine($"  ERRORE HUD delle tessere: lo script riscritto non si rilegge come previsto (mostra {(showOk ? "ok" : "no")}, " +
+                                      $"nascondi {(hideOk ? "ok" : "no")}, controlli delle tessere {countChecks}): non usato");
+                    return false;
+                }
+                ReplaceFile(update, source.Path, data);
+                embedded.Add((source.Path, data));
+                report.AppendLine($"  HUD delle tessere: {source.Path} in update.pak, fuori da Crash 1 mostra la riga delle tessere di Crash 1 al posto " +
+                                  $"di quella di Crash 2 e 3 quando ce n'e' almeno una ({string.Join(", ", counters.Select(c => c.objectName))}; " +
+                                  $"{objects} -> {again.Objects.Count} oggetti, {original.Length} -> {data.Length} byte; opzioni degli accessori " +
+                                  $"{(constSample != null ? "copiate" : "predefinite")}); --tessere-senza-hud lo lascia com'e'");
+                return true;
+            }
+            catch (Exception e)
+            {
+                report.AppendLine($"  ERRORE HUD delle tessere: {source.Path}: {e.GetType().Name}: {e.Message} (le tessere prese non si vedono in alto)");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Intro di Crash 3 (analisi): intro e partenze del livello convertito, le stesse nei file principali dei livelli originali
+        /// di Crash 3 (dove sta l'intro rispetto alla partenza, con quali valori) e lo script dell'intro scritto per esteso in
+        /// <rapporto>_intro.txt. Restituisce il percorso di quel file, o null se non si e' potuto scrivere
+        /// </summary>
+        private static string? AppendC3IntroAnalysis(StringBuilder report, IgArchive output, ArchiveIndex sw, string reportPath, List<string> introLines)
+        {
+            // Livello convertito
+            var levelLines = new List<string>();
+            foreach (IgArchiveFile file in output.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!lower.StartsWith("maps/") || !lower.EndsWith(".igz")) continue;
+                try
+                {
+                    byte[] data = file.Uncompress();
+                    if (!ContainsAscii(data, "C3_IntroSequence") && !ContainsAscii(data, "CPlayerStartEntity")) continue;
+                    DescribeIntroAndStarts(new IgzFile(file.Path, data, file.GameVersion), file.Path, levelLines);
+                }
+                catch (Exception e)
+                {
+                    levelLines.Add($"  {file.Path}: non letto ({e.Message})");
+                }
+            }
+            if (levelLines.Count == 0) levelLines.Add("  nessuna intro e nessuna partenza nei file del livello");
+
+            // Livelli originali di Crash 3 (file principale maps/crash3/<livello>/<livello>.igz), Gone Tomorrow per primo
+            static bool IsC3MainFile(string path)
+            {
+                string[] parts = path.Split('/');
+                return parts.Length == 4 && parts[0] == "maps" && parts[1] == "crash3" && parts[3] == parts[2] + ".igz";
+            }
+            var mainFiles = sw.ByPath.Where(e => IsC3MainFile(e.Key))
+                                     .OrderBy(e => e.Key.Contains("/l321_") ? 0 : 1).ThenBy(e => e.Key, StringComparer.Ordinal).ToList();
+            var originalLines = new List<string>();
+            int withIntro = 0, checkedFiles = 0;
+            const int maxLevels = 8;
+            foreach (var (path, file) in mainFiles)
+            {
+                if (withIntro >= maxLevels) break;
+                checkedFiles++;
+                try
+                {
+                    byte[] data = file.Uncompress();
+                    if (!ContainsAscii(data, "C3_IntroSequence")) continue;
+                    withIntro++;
+                    DescribeIntroAndStarts(new IgzFile(file.Path, data, file.GameVersion), path, originalLines);
+                }
+                catch (Exception e)
+                {
+                    originalLines.Add($"  {path}: non letto ({e.Message})");
+                }
+            }
+            if (originalLines.Count == 0) originalLines.Add("  nessuna (file principali dei livelli di Crash 3 non trovati nel dump)");
+
+            // Script dell'intro e della sequenza, scritti per esteso
+            var detail = new StringBuilder();
+            detail.AppendLine("INTRO DI CRASH 3: LIVELLO, LIVELLI ORIGINALI E SCRIPT DEL GIOCO SWITCH");
+            detail.AppendLine("Posizioni come nei file; rotazioni in gradi. \"nel sistema della partenza\": coordinate rispetto alla partenza");
+            detail.AppendLine("(PlayerStart) girata come la partenza. Nomi dei valori dell'intro come nell'editor.");
+            detail.AppendLine();
+            detail.AppendLine("===== INTRO DEL LIVELLO CONVERTITO");
+            foreach (string line in introLines) detail.AppendLine("  " + line);
+            foreach (string line in levelLines) detail.AppendLine(line);
+            detail.AppendLine();
+            detail.AppendLine($"===== LIVELLI ORIGINALI DI CRASH 3 ({withIntro} con l'intro su {checkedFiles} guardati, al massimo {maxLevels})");
+            foreach (string line in originalLines) detail.AppendLine(line);
+            detail.AppendLine();
+            detail.AppendLine("Ogni script: eventi (EVENTO: messaggio o funzione che lo fa partire), metodi, nodi. Ogni nodo ha un numero");
+            detail.AppendLine("(#n), il tipo e i valori che legge: costanti, campi (.nome: dei dati dello script o di un oggetto del gioco),");
+            detail.AppendLine("funzioni del gioco (fn), riferimenti (@file::oggetto). Sotto un nodo i suoi rami (nome:), poi il nodo che viene");
+            detail.AppendLine("dopo allo stesso livello; un nodo gia' scritto compare come -> #n.");
+            detail.AppendLine();
+            var scriptLines = new List<string>();
+            foreach (string name in new[] { "common_c3_introsequence", "common_cutscenesequenceplayer_c" })
+            {
+                IgArchiveFile? file = FindVscFile(sw, name);
+                if (file == null)
+                {
+                    detail.AppendLine($"script {name}: non trovato in vsc/ nel dump");
+                    scriptLines.Add($"  {name}: non trovato in vsc/ nel dump");
+                    continue;
+                }
+                detail.AppendLine($"===== {file.Path}");
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    var scripts = igz.Objects.OfType<igVscMetaObject>().ToList();
+                    if (scripts.Count == 0) detail.AppendLine("  nessuno script (igVscMetaObject) nel file");
+                    var dumper = new VscDumper(detail, igz.GameVersion) { MaxLines = name.Contains("intro") ? 6000 : 3000 };
+                    foreach (igVscMetaObject script in scripts) dumper.Dump(script, file.Path);
+                    scriptLines.Add($"  {file.Path}: {scripts.Count} script, {igz.Objects.Count} oggetti");
+                }
+                catch (Exception e)
+                {
+                    detail.AppendLine($"  non letto: {e.GetType().Name}: {e.Message}");
+                    scriptLines.Add($"  {file.Path}: non letto ({e.GetType().Name}: {e.Message})");
+                }
+                detail.AppendLine();
+            }
+
+            string detailPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(reportPath)) ?? ".",
+                                             Path.GetFileNameWithoutExtension(reportPath) + "_intro.txt");
+            string? writeError = null;
+            try
+            {
+                File.WriteAllText(detailPath, detail.ToString());
+            }
+            catch (Exception e)
+            {
+                writeError = e.Message;
+            }
+
+            report.AppendLine("=== INTRO DI CRASH 3 (analisi) ===");
+            report.AppendLine("L'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer: Crash che esce dal portale) fa comparire Crash. Qui");
+            report.AppendLine("quella del livello, dove sta rispetto alla partenza e, per confronto, quelle dei livelli originali di Crash 3;");
+            report.AppendLine("lo script dell'intro e' scritto per esteso in " +
+                              (writeError == null ? $"{Path.GetFileName(detailPath)}: allegalo insieme a questo rapporto."
+                                                  : $"{Path.GetFileName(detailPath)}, che pero' non si e' potuto scrivere ({writeError})."));
+            foreach (string line in introLines) report.AppendLine("  " + line);
+            report.AppendLine("intro e partenze nei file del livello convertito:");
+            foreach (string line in levelLines.Take(60)) report.AppendLine(line);
+            if (levelLines.Count > 60) report.AppendLine($"  ... e altre {levelLines.Count - 60} righe (nel file dell'intro)");
+            report.AppendLine($"intro e partenze dei livelli originali di Crash 3 ({withIntro} con l'intro; tutte nel file dell'intro):");
+            foreach (string line in originalLines.Take(24)) report.AppendLine(line);
+            if (originalLines.Count > 24) report.AppendLine($"  ... e altre {originalLines.Count - 24} righe (nel file dell'intro)");
+            report.AppendLine("script dell'intro scritti per esteso:");
+            foreach (string line in scriptLines) report.AppendLine(line);
+            report.AppendLine();
+            return writeError == null ? detailPath : null;
+        }
+
+        /// <summary>
+        /// Partenze (CPlayerStartEntity) e intro di Crash 3 (entita' con common_C3_IntroSequenceData) di un file: posizione,
+        /// valori, riferimenti e, per le entita' dello stesso file a cui l'intro rimanda, dove stanno rispetto alla partenza
+        /// </summary>
+        private static void DescribeIntroAndStarts(IgzFile igz, string path, List<string> lines)
+        {
+            List<CPlayerStartEntity> starts = igz.Objects.OfType<CPlayerStartEntity>().ToList();
+            CPlayerStartEntity? main = MainPlayerStart(igz, null);
+            foreach (CPlayerStartEntity start in starts)
+            {
+                lines.Add($"  partenza {start.ObjectName ?? "?"} ({path}): {PlaceText(start)}, inizio della zona {(start._zoneStart ? "si'" : "no")}, " +
+                          $"camera {RefText(start._camera?.Reference)}" + (ReferenceEquals(start, main) && starts.Count > 1 ? " (quella usata per il confronto)" : ""));
+            }
+            string Relative(igEntity entity)
+            {
+                CPlayerStartEntity? start = MainPlayerStart(igz, entity);
+                return start == null ? "nessuna partenza nel file" : $"rispetto alla partenza {start.ObjectName}: {RelativeText(start, entity)}";
+            }
+            foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+            {
+                common_C3_IntroSequenceData? data = entity.GetComponent<common_C3_IntroSequenceData>();
+                if (data == null) continue;
+                lines.Add($"  intro {entity.ObjectName ?? "?"} ({path}): {PlaceText(entity)}, {Relative(entity)}");
+                lines.Add($"    {IntroValuesText(data)}");
+                lines.Add($"    riferimenti: {IntroRefsText(data)}");
+                common_CutsceneSequencePlayerData? player = entity.GetComponent<common_CutsceneSequencePlayerData>();
+                if (player != null) lines.Add($"    sequenza: {CutscenePlayerText(player)}");
+                var targets = new List<(string label, igHandleMetaField? handle)>
+                {
+                    ("Entity_0x50", data._Entity_0x50), ("Entity_0x70", data._Entity_0x70), ("camera", data._Camera_Base),
+                    ("checkpoint di partenza", player?._Starting_Checkpoint), ("inquadrature", player?._CutsceneSequenceShotList),
+                };
+                foreach (var (label, handle) in targets)
+                {
+                    if (handle?.Reference == null) continue;
+                    igObject? target = igz.FindObject(handle.Reference);
+                    if (target is igEntity targetEntity)
+                        lines.Add($"    {label}: {EntityText(targetEntity)} {PlaceText(targetEntity)}, {Relative(targetEntity)}");
+                    else if (target is CEntityHandleList list)
+                        lines.Add($"    {label}: {list._data.Count} elementi" + (list._data.Count > 0 ? ": " + string.Join(", ", list._data.Take(6).Select(h => RefText(h?.Reference))) : ""));
+                    else if (target != null)
+                        lines.Add($"    {label}: {target.ObjectName ?? "?"} [{target.GetType().Name}]");
+                    else
+                        lines.Add($"    {label}: {RefText(handle.Reference)} (fuori da questo file)");
+                }
+            }
+        }
+
         // Script VSC delle tessere di Crash 1 e dell'HUD (nome del file nel dump Switch, senza estensione), scritti per esteso
         private static readonly HashSet<string> _tokenScriptFiles = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -5785,7 +6479,8 @@ namespace NST
             report.AppendLine("=== TESSERE DEI BONUS DI CRASH 1 (analisi) ===");
             report.AppendLine($"Gioco del livello: {game ?? "?"}. Fuori da Crash 1 il gestore delle tessere di Crash (Crash1_BonusRoundManager) si");
             report.AppendLine("toglie all'avvio e le tessere non si contano: dalla v51, con --nuovo, la registrazione mette in update.pak una copia che resta");
-            report.AppendLine("(vedi REGISTRAZIONE DEL LIVELLO). Qui quello che il livello usa e dove sta nel gioco Switch; gli script scritti per esteso sono in");
+            report.AppendLine("e, dalla v52, una copia dell'HUD di Crash che mostra le tessere prese (vedi REGISTRAZIONE DEL LIVELLO). Qui quello che il");
+            report.AppendLine("livello usa e dove sta nel gioco Switch; gli script scritti per esteso sono in");
             report.AppendLine(writeError == null ? $"{Path.GetFileName(detailPath)}: allegalo insieme a questo rapporto."
                                                  : $"{Path.GetFileName(detailPath)}, che pero' non si e' potuto scrivere ({writeError}).");
             report.AppendLine($"teletrasporti dei bonus nel livello: {teleporterCount}");
