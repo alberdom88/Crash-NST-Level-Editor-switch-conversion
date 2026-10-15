@@ -100,6 +100,9 @@ namespace NST
             // converti: non spegnere le occlusioni (COcclusionTrigger, COcclusionBox) dei file convertiti: sulla console nascondono
             // decorazioni, pensate per il livello da cui vengono (dalla v49 si spengono da sole)
             public bool KeepOcclusion;
+            // --nuovo: lascia com'e' il gestore delle tessere dei bonus di Crash 1 (Crash1_BonusRoundManager), che fuori da Crash 1
+            // si toglie: senza, per un livello con le tessere di un altro gioco va in update.pak una copia che resta (dalla v51)
+            public bool TokensOnlyCrash1;
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
             public string Reflections = "auto";
@@ -215,6 +218,7 @@ namespace NST
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-occlusioni") { options.KeepOcclusion = true; rest.RemoveAt(i); }
+                else if (name == "--tessere-solo-crash1") { options.TokensOnlyCrash1 = true; rest.RemoveAt(i); }
                 else if (name == "--riflessi" && hasValue) { options.Reflections = rest[i + 1].ToLowerInvariant(); rest.RemoveRange(i, 2); }
                 else if (name == "--pavimento-blocchi" && hasValue)
                 {
@@ -263,7 +267,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -3324,12 +3328,14 @@ namespace NST
                 else if (reflectionFiles.Count > 0) planarReflections = true;
                 string reflectionsReason = options.Reflections != "auto" ? $"--riflessi {options.Reflections}"
                     : reflectionFiles.Count > 0 ? $"il livello ha {string.Join(", ", reflectionFiles.Take(3))}" : "";
+                // Tessere dei bonus di Crash 1 nel livello (teletrasporti o tessere): fuori da Crash 1 serve il gestore che resta
+                bool crash1Tokens = LevelHasCrash1Tokens(output);
                 bool registered;
                 try
                 {
                     registered = BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
                                                    options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode,
-                                                   planarReflections, reflectionsReason);
+                                                   planarReflections, reflectionsReason, crash1Tokens, options.TokensOnlyCrash1);
                 }
                 catch (Exception registrationError)
                 {
@@ -3612,7 +3618,7 @@ namespace NST
                                               Dictionary<string, string> renamedNamespaces, string? zoneInfoTemplate, string registerIn,
                                               bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
                                               CZoneInfo? poolSource, string? poolFrom, bool editorMode,
-                                              bool? planarReflections, string reflectionsReason)
+                                              bool? planarReflections, string reflectionsReason, bool crash1Tokens, bool tokensOnlyCrash1)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -3797,6 +3803,30 @@ namespace NST
                 embedded.Add((zoneInfoPath, zoneInfoData));
                 zoneInfos.Add(zoneInfoPath);
                 report.AppendLine($"  zone info creata (il livello non ne aveva una): {zoneInfoPath}");
+            }
+
+            // Tessere dei bonus di Crash 1 in un livello di un altro gioco: il gestore delle tessere (Crash1_BonusRoundManager,
+            // componente di Crash e Coco) all'avvio controlla il gioco e fuori da Crash 1 si toglie, quindi le tessere prese non
+            // si contano e il teletrasporto del bonus non si accende. In update.pak va una copia dello script che resta
+            if (crash1Tokens)
+            {
+                EGameYear? levelYear = forcedYear;
+                try
+                {
+                    IgArchiveFile? registered = update.Files.FirstOrDefault(f => f.Path.Equals(zoneInfoPath, StringComparison.OrdinalIgnoreCase));
+                    if (registered?.ToIgzFile().FindObject<CZoneInfo>() is CZoneInfo finalZone) levelYear = finalZone._year;
+                }
+                catch
+                {
+                    // resta il gioco di --gioco
+                }
+                if (levelYear == EGameYear.eGY_2017_Crash1)
+                    report.AppendLine("  tessere dei bonus di Crash 1: livello di Crash 1, il gestore delle tessere resta com'e'");
+                else if (tokensOnlyCrash1)
+                    report.AppendLine($"  tessere dei bonus di Crash 1: --tessere-solo-crash1, il gestore resta com'e' (nel gioco {levelYear?.ToString() ?? "?"} " +
+                                      "si toglie: le tessere non si contano)");
+                else
+                    PatchBonusTokenManager(sw, update, embedded, report, levelYear);
             }
 
             // File del pacchetto di chunkInfos: la versione di update.pak, se c'e', altrimenti quella di chunkInfos.pak
@@ -5309,11 +5339,119 @@ namespace NST
 
         // ------------------------------------------------------------------ tessere dei bonus di Crash 1
 
+        /// <summary>
+        /// Il livello ha le tessere dei bonus di Crash 1: teletrasporti (common_BonusRoundTeleporterData) o tessere
+        /// (common_Collectible_Bonus_SpawnedData) nei file maps/ dell'archivio
+        /// </summary>
+        private static bool LevelHasCrash1Tokens(IgArchive output)
+        {
+            foreach (IgArchiveFile file in output.Files)
+            {
+                if (!file.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase) || !file.Path.EndsWith(".igz", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    byte[] data = file.Uncompress();
+                    if (!ContainsAscii(data, "Bonus")) continue;
+                    IgzFile igz = new IgzFile(file.Path, data, file.GameVersion);
+                    if (igz.Objects.Any(o => o is common_BonusRoundTeleporterData || o is common_Collectible_Bonus_SpawnedData)) return true;
+                }
+                catch
+                {
+                    // file non leggibile: non conta
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Nome di una funzione del gioco usata da un nodo VSC (CCrashBandicootNodes::checkCrashGame_VSC, ...)
+        /// </summary>
+        private static string FunctionName(igMetaFunction? function) =>
+            function == null ? "" : function._functionName ?? function.Reference?.objectName ?? function.ObjectName ?? "";
+
+        /// <summary>
+        /// Gestore delle tessere di Crash 1 (vsc/common/Characters/Crash1_BonusRoundManager_c.igz): all'avvio (metodo
+        /// startOnlyOnce) chiede se il gioco e' Crash 1 (CCrashBandicootNodes::checkCrashGame) e negli altri giochi cerca il
+        /// suo componente e lo toglie (findComponent2, removeComponent). Nella copia per update.pak quel ramo si stacca: il
+        /// gestore resta, conta le tessere, al terzo accende il teletrasporto. Nei livelli senza tessere non fa niente (nessuno
+        /// gli manda i messaggi delle tessere). Lo script si riscrive con le sue dipendenze e si controlla rileggendolo
+        /// </summary>
+        private static bool PatchBonusTokenManager(ArchiveIndex sw, IgArchive update, List<(string path, byte[] data)> embedded,
+                                                   StringBuilder report, EGameYear? levelYear)
+        {
+            IgArchiveFile? source = sw.ByPath.Where(e => e.Key.StartsWith("vsc/") &&
+                                                         NamespaceUtils.GetFileName(e.Key, false).Equals("crash1_bonusroundmanager_c", StringComparison.OrdinalIgnoreCase))
+                                             .OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => e.Value).FirstOrDefault();
+            if (source == null)
+            {
+                report.AppendLine("  ERRORE tessere dei bonus: Crash1_BonusRoundManager_c.igz non trovato nel dump, le tessere non si contano");
+                return false;
+            }
+            static bool RemovesItself(igVscActionNode? node) =>
+                node is igVscCppActionNode find && FunctionName(find._metaFunction).Contains("findComponent", StringComparison.OrdinalIgnoreCase) &&
+                find._outNodes != null &&
+                find._outNodes._data.Any(n => n is igVscCppActionNode remove &&
+                                              FunctionName(remove._metaFunction).Contains("removeComponent", StringComparison.OrdinalIgnoreCase));
+            static List<igVscCppActionNode> GameChecks(IgzFile igz) =>
+                igz.Objects.OfType<igVscCppActionNode>()
+                   .Where(n => FunctionName(n._metaFunction).Contains("checkCrashGame", StringComparison.OrdinalIgnoreCase)).ToList();
+            try
+            {
+                byte[] original = source.Uncompress();
+                IgzFile igz = new IgzFile(source.Path, original, source.GameVersion);
+                int objects = igz.Objects.Count;
+                int cut = 0;
+                foreach (igVscCppActionNode check in GameChecks(igz))
+                {
+                    if (check._outNodes == null) continue;
+                    var outs = check._outNodes._data;
+                    for (int i = 0; i < outs.Count; i++)
+                    {
+                        if (!RemovesItself(outs[i])) continue;
+                        outs[i] = null!;  // uscita scollegata, come quelle che nei grafi non portano a niente
+                        cut++;
+                    }
+                }
+                if (cut == 0)
+                {
+                    report.AppendLine($"  ERRORE tessere dei bonus: in {source.Path} non c'e' il controllo del gioco che toglie il gestore " +
+                                      "(script diverso da quello conosciuto): non cambiato, le tessere non si contano");
+                    return false;
+                }
+                igz.GameVersion = GameVersion.NSX;
+                byte[] data = igz.Save(includeDependencies: true);
+
+                // Controllo: lo script riscritto si rilegge, ha gli stessi oggetti e nessun controllo del gioco porta piu' a togliersi
+                var again = new IgzFile(source.Path, data, GameVersion.NSX);
+                List<igVscCppActionNode> checks = GameChecks(again);
+                bool stillRemoves = checks.Any(n => n._outNodes != null && n._outNodes._data.Any(o => RemovesItself(o)));
+                if (checks.Count == 0 || stillRemoves || again.Objects.OfType<igVscMetaObject>().Count() != igz.Objects.OfType<igVscMetaObject>().Count())
+                {
+                    report.AppendLine($"  ERRORE tessere dei bonus: lo script riscritto non si rilegge come previsto ({checks.Count} controlli, " +
+                                      $"ramo ancora presente: {(stillRemoves ? "si'" : "no")}): non usato, le tessere non si contano");
+                    return false;
+                }
+                ReplaceFile(update, source.Path, data);
+                embedded.Add((source.Path, data));
+                report.AppendLine($"  tessere dei bonus di Crash 1 in un livello di {levelYear?.ToString() ?? "un altro gioco"}: {source.Path} in update.pak " +
+                                  $"con il gestore delle tessere che resta anche fuori da Crash 1 ({cut} ramo staccato, {objects} -> {again.Objects.Count} oggetti, " +
+                                  $"{original.Length} -> {data.Length} byte); --tessere-solo-crash1 lo lascia com'e'");
+                return true;
+            }
+            catch (Exception e)
+            {
+                report.AppendLine($"  ERRORE tessere dei bonus: {source.Path}: {e.GetType().Name}: {e.Message} (le tessere non si contano)");
+                return false;
+            }
+        }
+
         // Script VSC delle tessere di Crash 1 e dell'HUD (nome del file nel dump Switch, senza estensione), scritti per esteso
         private static readonly HashSet<string> _tokenScriptFiles = new(StringComparer.OrdinalIgnoreCase)
         {
             "common_bonusroundteleporter", "common_collectible_bonus_spawned_c", "crash1_bonusroundmanager_c",
             "common_crash_hud_bonusroundtokens", "common_crash_gui_hud_c", "common_level_manager_c",
+            // dalla v51: gestore dei bonus (Crash 1, 2 e 3), fine del bonus e HUD di Crash, che guardano il gioco
+            "common_basic_bonusround_manager", "common_bonusroundend_c", "crashbandicoot_hud_c",
         };
 
         /// <summary>
@@ -5474,7 +5612,7 @@ namespace NST
                 scanned++;
                 foreach (string counter in counterNames)
                     if (ContainsAscii(data, counter)) users[counter].Add(path);
-                if (vsc && (ContainsAscii(data, "_year") || ContainsAscii(data, "Year"))) yearFiles.Add((path, file));
+                if (vsc && (ContainsAscii(data, "_year") || ContainsAscii(data, "Year") || ContainsAscii(data, "CrashGame"))) yearFiles.Add((path, file));
                 if (ui && (ContainsAscii(data, "BonusRoundTokens") || ContainsAscii(data, "bonusroundtokens"))) hudFiles.Add((path, file));
             }
 
@@ -5603,8 +5741,8 @@ namespace NST
                     IgzFile igz = file.ToIgzFile();
                     var dumper = new VscDumper(new StringBuilder(), igz.GameVersion) { MaxLines = int.MaxValue };
                     foreach (igVscMetaObject script in igz.Objects.OfType<igVscMetaObject>()) dumper.Dump(script, path);
-                    var notes = dumper.Notes.Where(n => n.Contains("_year") || n.Contains("Year")).ToList();
-                    yearScripts[path] = notes.Count > 0 ? notes : new List<string> { "(\"_year\"/\"Year\" nel file, ma in nessun nodo raggiunto dagli eventi)" };
+                    var notes = dumper.Notes.Where(n => n.Contains("_year") || n.Contains("Year") || n.Contains("CrashGame")).ToList();
+                    yearScripts[path] = notes.Count > 0 ? notes : new List<string> { "(\"_year\"/\"Year\"/\"CrashGame\" nel file, ma in nessun nodo raggiunto dagli eventi)" };
                 }
                 catch (Exception e)
                 {
@@ -5613,11 +5751,11 @@ namespace NST
                 }
             }
 
-            detail.AppendLine("===== NODI DEGLI SCRIPT DELLE TESSERE CHE GUARDANO LA ZONA O L'ANNO DEL GIOCO");
+            detail.AppendLine("===== NODI DEGLI SCRIPT DELLE TESSERE CHE GUARDANO LA ZONA O IL GIOCO (ANNO, checkCrashGame)");
             if (tokenYearUses.Count == 0) detail.AppendLine("  nessuno");
             foreach (string line in tokenYearUses) detail.AppendLine("  " + line);
             detail.AppendLine();
-            detail.AppendLine($"===== ALTRI SCRIPT CHE GUARDANO L'ANNO DEL GIOCO ({yearScripts.Count})");
+            detail.AppendLine($"===== ALTRI SCRIPT CHE GUARDANO IL GIOCO (ANNO, checkCrashGame) ({yearScripts.Count})");
             foreach (var (path, notes) in yearScripts)
             {
                 detail.AppendLine($"  {path} ({ArchivesText(path)})");
@@ -5645,8 +5783,9 @@ namespace NST
             }
 
             report.AppendLine("=== TESSERE DEI BONUS DI CRASH 1 (analisi) ===");
-            report.AppendLine($"Gioco del livello: {game ?? "?"}. Con --gioco crash3 le tessere prese non si contano e il bonus non parte:");
-            report.AppendLine("qui quello che il livello usa e dove sta nel gioco Switch. Gli script delle tessere scritti per esteso sono in");
+            report.AppendLine($"Gioco del livello: {game ?? "?"}. Fuori da Crash 1 il gestore delle tessere di Crash (Crash1_BonusRoundManager) si");
+            report.AppendLine("toglie all'avvio e le tessere non si contano: dalla v51, con --nuovo, la registrazione mette in update.pak una copia che resta");
+            report.AppendLine("(vedi REGISTRAZIONE DEL LIVELLO). Qui quello che il livello usa e dove sta nel gioco Switch; gli script scritti per esteso sono in");
             report.AppendLine(writeError == null ? $"{Path.GetFileName(detailPath)}: allegalo insieme a questo rapporto."
                                                  : $"{Path.GetFileName(detailPath)}, che pero' non si e' potuto scrivere ({writeError}).");
             report.AppendLine($"teletrasporti dei bonus nel livello: {teleporterCount}");
@@ -5669,11 +5808,11 @@ namespace NST
             report.AppendLine($"script delle tessere scritti per esteso: {toDump.Count} ({string.Join(", ", toDump.Keys.Select(p => NamespaceUtils.GetFileName(p, false)))})");
             report.AppendLine("prova di riscrittura degli script delle tessere (letti, riscritti con l'editor e riletti):");
             foreach (string line in rewriteLines) report.AppendLine(line);
-            report.AppendLine("nodi degli script delle tessere che guardano la zona o l'anno del gioco:");
+            report.AppendLine("nodi degli script delle tessere che guardano la zona o il gioco (anno, checkCrashGame):");
             if (tokenYearUses.Count == 0) report.AppendLine("  nessuno: il controllo, se c'e', e' nel codice del gioco o in un altro script");
             foreach (string line in tokenYearUses.Take(40)) report.AppendLine("  " + line);
             if (tokenYearUses.Count > 40) report.AppendLine($"  ... e altri {tokenYearUses.Count - 40} (nel file delle tessere)");
-            report.AppendLine($"altri script che guardano l'anno del gioco: {yearScripts.Count}" + (yearErrors > 0 ? $" ({yearErrors} non letti)" : "") +
+            report.AppendLine($"altri script che guardano il gioco (anno, checkCrashGame): {yearScripts.Count}" + (yearErrors > 0 ? $" ({yearErrors} non letti)" : "") +
                               (yearScripts.Count > 0 ? ": " + string.Join(", ", yearScripts.Keys.Take(40).Select(p => NamespaceUtils.GetFileName(p, false))) +
                                                        (yearScripts.Count > 40 ? "..." : "") : ""));
             report.AppendLine();
@@ -5734,7 +5873,7 @@ namespace NST
                 string graphBefore = Graph(igz, path);
                 int objectsBefore = igz.Objects.Count;
                 igz.GameVersion = GameVersion.NSX;
-                byte[] saved = igz.Save();
+                byte[] saved = igz.Save(includeDependencies: true);
                 var again = new IgzFile(path, saved, GameVersion.NSX);
                 string graphAfter = Graph(again, path);
 
@@ -6013,7 +6152,7 @@ namespace NST
                         branches.Add($"{label} -> {(_ids.TryGetValue(target, out int t) ? "#" + t : "?")} {ShortType(target)}");
                     }
                 }
-                if (line.Contains("_year") || line.Contains("Year") || line.Contains("ZoneInfo") || line.Contains("zoneInfo"))
+                if (line.Contains("_year") || line.Contains("Year") || line.Contains("CrashGame") || line.Contains("ZoneInfo") || line.Contains("zoneInfo"))
                 {
                     if (next != null) branches.Add($"dopo -> {ShortType(next)}");
                     Notes.Add($"{_script}: {line.Trim()}" + (branches.Count > 0 ? " | " + string.Join("; ", branches) : ""));
@@ -6042,11 +6181,15 @@ namespace NST
                         if (target != null && IsFlowObject(target)) yield return ($"{label}[{key}]", target);
                     yield break;
                 }
-                int index = 0;
-                foreach (object item in DataItems(value))
+                // indici veri della lista (le uscite scollegate sono vuote e contano)
+                if (value.GetType().GetField("_data")?.GetValue(value) is IEnumerable items)
                 {
-                    if (IsFlowObject(item)) yield return ($"{label}[{index}]", item);
-                    index++;
+                    int index = 0;
+                    foreach (object? item in items)
+                    {
+                        if (item != null && IsFlowObject(item)) yield return ($"{label}[{index}]", item);
+                        index++;
+                    }
                 }
             }
 

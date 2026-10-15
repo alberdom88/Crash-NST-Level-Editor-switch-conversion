@@ -54,7 +54,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
         [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]...
-        [--originale-switch <testo>]...
+        [--originale-switch <testo>]... [--tessere-solo-crash1]
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
@@ -316,21 +316,29 @@ Dettagli:
   nascondevano, se contengono la partenza) e `DECORAZIONI VICINO ALLA PARTENZA` le 60 entità con un
   modello più vicine alla partenza, con quello che può nasconderle (`NELLE OCCLUSIONI`, `NASCOSTA`,
   importanza per la distanza, scala).
-- Tessere dei bonus di Crash 1 (analisi, dalla v50): con `--gioco crash3` le tessere (Tawna, Brio,
-  Cortex) che escono dalle casse bonus non si contano e il bonus non parte. Il conteggio non sta nel
-  livello ma negli script del gioco (VSC): la tessera presa (`common_Collectible_Bonus_Spawned`), il
-  gestore delle tessere nei dati di Crash (`Crash1_BonusRoundManager`), il teletrasporto del bonus
-  (`common_BonusRoundTeleporter`) e l'HUD (`common_Crash_HUD_BonusRoundTokens` in `ui/crash_hud.igz`),
-  con i contatori nelle variabili del gioco (`gamevariables`). Se il livello ha tessere o teletrasporti,
-  la sezione `TESSERE DEI BONUS DI CRASH 1 (analisi)` elenca i teletrasporti del livello (tipo, tag,
-  contatori, script) e quelli degli originali di Crash 1 (Jungle Rollers, Rolling Stones) per
-  confronto, le tessere per tipo, il gestore nei dati dei personaggi, l'HUD, i contatori (valore
-  iniziale, durata) con i file del gioco che li nominano e gli script che guardano l'anno del gioco
-  (Crash 1/2/3). Il file `<rapporto>_tessere.txt`, accanto al rapporto, ha gli script delle tessere
-  scritti per esteso: eventi, nodi numerati con i valori che leggono (costanti, campi, funzioni del
-  gioco) e i loro rami. Serve a trovare il controllo che spegne le tessere fuori da Crash 1 e a
-  correggerlo (o a far partire il contatore da 3). Con `--gioco crash1` le tessere dovrebbero
-  funzionare come negli originali.
+- Tessere dei bonus di Crash 1 (dalla v51): le tessere (Tawna, Brio, Cortex) che escono dalle casse
+  bonus le conta il gestore delle tessere, un componente di Crash e Coco
+  (`vsc/common/Characters/Crash1_BonusRoundManager_c.igz`): a ogni tessera presa aumenta il
+  contatore del suo tipo (`C1_BonusCount_Tawna`, `_Brio`, `_Cortex` in `gamevariables`) e al terzo
+  accende il teletrasporto del bonus con lo stesso tipo (tag `Teleporter_Tawna`, ...), che va
+  raggiunto per entrare nel bonus. All'avvio, però, il gestore chiede se il gioco è Crash 1
+  (`CCrashBandicootNodes::checkCrashGame`) e negli altri giochi si toglie da solo
+  (`findComponent2`, `removeComponent`): con `--gioco crash3` (o crash2) le tessere prese non si
+  contano e il bonus non parte. Dalla v51, con `--nuovo`, se il livello ha tessere o teletrasporti
+  di Crash 1 e non è di Crash 1, la registrazione mette in `update.pak` (e nei file `update/` del
+  livello, che NST Pak Manager usa) una copia dello script con quel ramo staccato: il gestore resta
+  e conta. Nei livelli senza tessere non fa niente, perché nessuno gli manda i messaggi delle
+  tessere. Lo script viene riscritto con le sue dipendenze e riletto per controllo; la sezione
+  `REGISTRAZIONE DEL LIVELLO` lo dice. `--tessere-solo-crash1` lo lascia com'è. L'HUD che mostra le
+  tessere (`ui/crash_hud.igz`) dipende anche da `CrashBandicoot_HUD`, che guarda il gioco: fuori da
+  Crash 1 il contatore sullo schermo può non vedersi, anche se le tessere si contano (il
+  teletrasporto mostra comunque quante ne hai prese).
+  La sezione `TESSERE DEI BONUS DI CRASH 1 (analisi)` (dalla v50) elenca i teletrasporti del livello
+  e quelli degli originali di Crash 1 per confronto, le tessere per tipo, il gestore nei dati dei
+  personaggi, l'HUD, i contatori (valore iniziale, durata) e gli script che guardano il gioco (anno,
+  `checkCrashGame`), con una prova di riscrittura degli script delle tessere. Il file
+  `<rapporto>_tessere.txt`, accanto al rapporto, ha gli script scritti per esteso: eventi, nodi
+  numerati con i valori che leggono (costanti, campi, funzioni del gioco) e i loro rami.
 - Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
   controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
   hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non
