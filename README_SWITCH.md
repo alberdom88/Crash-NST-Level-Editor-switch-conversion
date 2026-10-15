@@ -306,14 +306,31 @@ Dettagli:
   dove sta Crash, con zone (`COcclusionTrigger`: quando Crash o la telecamera ci entra) che attivano
   gruppi (`COcclusionBox`: le decorazioni e gli oggetti da nascondere, o da mostrare se il gruppo è
   invertito). Quelle copiate dall'editor con un file di un altro livello (nel Level 10 le 2 zone e i
-  4 gruppi di `L202_SnowGo_Reflections`) sono fatte per quel livello: nel livello nuovo possono
-  nascondere decorazioni a caso (nel Level 10 probabilmente il pavimento, la ringhiera e il ponte),
-  mentre Crash, casse e nemici restano. Sul PC non sembrano contare. Dalla v49 si spengono: zone senza gruppi da attivare,
+  4 gruppi di `L202_SnowGo_Reflections`) sono fatte per quel livello: nel livello nuovo nascondono
+  decorazioni a caso, mentre Crash, casse e nemici restano. Nel Level 10 i 4 gruppi di Snow Go non
+  elencavano entità ma erano attivi fin dall'inizio, con i loro limiti: la partenza del Level 10 sta
+  fuori e il pavimento non si vedeva. Spente le occlusioni (e tolti i `Black` di Ruination) il
+  pavimento si vede. Sul PC non contano. Dalla v49 si spengono: zone senza gruppi da attivare,
   gruppi senza entità da nascondere, non invertiti e non attivi; `--tieni-occlusioni` le lascia come
   sono. La sezione `OCCLUSIONI` le elenca com'erano (posizione, limiti, opzioni, entità che
   nascondevano, se contengono la partenza) e `DECORAZIONI VICINO ALLA PARTENZA` le 60 entità con un
   modello più vicine alla partenza, con quello che può nasconderle (`NELLE OCCLUSIONI`, `NASCOSTA`,
   importanza per la distanza, scala).
+- Tessere dei bonus di Crash 1 (analisi, dalla v50): con `--gioco crash3` le tessere (Tawna, Brio,
+  Cortex) che escono dalle casse bonus non si contano e il bonus non parte. Il conteggio non sta nel
+  livello ma negli script del gioco (VSC): la tessera presa (`common_Collectible_Bonus_Spawned`), il
+  gestore delle tessere nei dati di Crash (`Crash1_BonusRoundManager`), il teletrasporto del bonus
+  (`common_BonusRoundTeleporter`) e l'HUD (`common_Crash_HUD_BonusRoundTokens` in `ui/crash_hud.igz`),
+  con i contatori nelle variabili del gioco (`gamevariables`). Se il livello ha tessere o teletrasporti,
+  la sezione `TESSERE DEI BONUS DI CRASH 1 (analisi)` elenca i teletrasporti del livello (tipo, tag,
+  contatori, script) e quelli degli originali di Crash 1 (Jungle Rollers, Rolling Stones) per
+  confronto, le tessere per tipo, il gestore nei dati dei personaggi, l'HUD, i contatori (valore
+  iniziale, durata) con i file del gioco che li nominano e gli script che guardano l'anno del gioco
+  (Crash 1/2/3). Il file `<rapporto>_tessere.txt`, accanto al rapporto, ha gli script delle tessere
+  scritti per esteso: eventi, nodi numerati con i valori che leggono (costanti, campi, funzioni del
+  gioco) e i loro rami. Serve a trovare il controllo che spegne le tessere fuori da Crash 1 e a
+  correggerlo (o a far partire il contatore da 3). Con `--gioco crash1` le tessere dovrebbero
+  funzionare come negli originali.
 - Oggetti che mancano (dalla v39): la sezione `OGGETTI CHE MANCANO NEI FILE USATI DAL LIVELLO`
   controlla ogni riferimento dei file convertiti a un oggetto di un altro file (anche quelli per
   hash) e elenca i file che ci sono, nell'archivio o negli archivi comuni del gioco, ma non

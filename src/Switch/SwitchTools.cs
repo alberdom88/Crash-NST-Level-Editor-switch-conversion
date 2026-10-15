@@ -3433,6 +3433,19 @@ namespace NST
             report.AppendLine();
             AppendLightVolumes(report, lightVolumes, playerStart);
             AppendOcclusionAndNearStart(report, occlusionInfos, placedEntities, playerStart, !options.KeepOcclusion);
+            // Tessere dei bonus di Crash 1: analisi (con --gioco crash3 non si contano), dettagli in <rapporto>_tessere.txt
+            string? tokensPath = null;
+            try
+            {
+                Console.WriteLine("Controllo le tessere dei bonus...");
+                tokensPath = AppendBonusTokens(report, output, sw, reportPath, options.Game ?? GameOfYear(editorYear));
+            }
+            catch (Exception e)
+            {
+                report.AppendLine("=== TESSERE DEI BONUS DI CRASH 1 (analisi) ===");
+                report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                report.AppendLine();
+            }
             if (unreadableFiles.Count > 0)
             {
                 report.AppendLine($"=== FILE CONVERTITI CHE NON SI RILEGGONO ({unreadableFiles.Count}) ===");
@@ -3516,6 +3529,7 @@ namespace NST
             Console.WriteLine($"Archivio Switch scritto in {outputPath} ({output.Files.Count} file, dettagli in {reportPath})");
             if (updatePath != null) Console.WriteLine($"Registrazione del livello scritta in {updatePath}: installala insieme al livello");
             else if (options.NewLevel) Console.WriteLine("ERRORE: update.pak con la registrazione del livello non creato (vedi il rapporto)");
+            if (tokensPath != null) Console.WriteLine($"Analisi delle tessere dei bonus scritta in {tokensPath}: allegala insieme al rapporto");
             if (nameWarning != null) Console.WriteLine(nameWarning);
             if (missingReferences.Count > 0)
             {
@@ -5290,6 +5304,840 @@ namespace NST
             {
                 report.AppendLine($"  ATTENZIONE: opzioni speciali del livello ({string.Join(", ", options)}): i dati del personaggio/hub " +
                                   "che l'editor crea per queste opzioni non vengono ancora convertiti");
+            }
+        }
+
+        // ------------------------------------------------------------------ tessere dei bonus di Crash 1
+
+        // Script VSC delle tessere di Crash 1 e dell'HUD (nome del file nel dump Switch, senza estensione), scritti per esteso
+        private static readonly HashSet<string> _tokenScriptFiles = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "common_bonusroundteleporter", "common_collectible_bonus_spawned_c", "crash1_bonusroundmanager_c",
+            "common_crash_hud_bonusroundtokens", "common_crash_gui_hud_c", "common_level_manager_c",
+        };
+
+        /// <summary>
+        /// Tessere dei bonus di Crash 1 (analisi): con --gioco crash3 le tessere prese non si contano e il bonus non parte.
+        /// Nel rapporto: teletrasporti e tessere del livello, gestore delle tessere nei dati del personaggio, HUD delle
+        /// tessere, contatori (variabili del gioco) con chi li nomina, script che guardano l'anno del gioco. In
+        /// [rapporto]_tessere.txt gli script delle tessere scritti come grafo. Niente se il livello non ha tessere ne'
+        /// teletrasporti; restituisce il percorso del file con i dettagli
+        /// </summary>
+        private static string? AppendBonusTokens(StringBuilder report, IgArchive output, ArchiveIndex sw, string reportPath, string? game)
+        {
+            var levelLines = new List<string>();
+            var scriptNamespaces = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            var variables = new SortedDictionary<string, NamedReference>(StringComparer.OrdinalIgnoreCase);
+            var tokenTypes = new SortedDictionary<string, int>();
+            var otherBonus = new SortedDictionary<string, int>();
+            int teleporterCount = 0;
+
+            void AddVariable(igHandleMetaField? handle)
+            {
+                NamedReference? reference = handle?.Reference;
+                if (reference != null && !string.IsNullOrEmpty(reference.objectName)) variables[RefText(reference)] = reference;
+            }
+            void AddScript(igObject? meta)
+            {
+                string? ns = meta?.Reference?.namespaceName;
+                if (!string.IsNullOrEmpty(ns)) scriptNamespaces.Add(ns);
+            }
+
+            // Livello: teletrasporti (common_BonusRoundTeleporterData), tessere (common_Collectible_Bonus_SpawnedData)
+            foreach (IgArchiveFile file in output.Files)
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (!lower.StartsWith("maps/") || !lower.EndsWith(".igz")) continue;
+                IgzFile igz;
+                try
+                {
+                    byte[] data = file.Uncompress();
+                    if (!ContainsAscii(data, "Bonus")) continue;
+                    igz = new IgzFile(file.Path, data, file.GameVersion);
+                }
+                catch (Exception e)
+                {
+                    levelLines.Add($"  {file.Path}: non letto ({e.Message})");
+                    continue;
+                }
+
+                teleporterCount += DescribeTeleporters(igz, file.Path, levelLines, AddScript, AddVariable);
+                foreach (common_Collectible_Bonus_SpawnedData c in igz.Objects.OfType<common_Collectible_Bonus_SpawnedData>())
+                {
+                    AddScript(c._meta);
+                    string key = c._BonusRoundType.ToString();
+                    tokenTypes[key] = tokenTypes.GetValueOrDefault(key) + 1;
+                }
+                foreach (CVscComponentData v in igz.Objects.OfType<CVscComponentData>())
+                {
+                    if (v is common_BonusRoundTeleporterData || v is common_Collectible_Bonus_SpawnedData) continue;
+                    string type = v.GetType().Name;
+                    if (!type.Contains("Bonus", StringComparison.OrdinalIgnoreCase)) continue;
+                    otherBonus[type] = otherBonus.GetValueOrDefault(type) + 1;
+                }
+            }
+            if (teleporterCount == 0 && tokenTypes.Count == 0) return null;
+
+            // Archivi Switch in cui c'e' ogni file
+            var archivesOf = new Dictionary<string, SortedSet<string>>();
+            foreach (var (file, archive) in sw.ArchiveOf)
+            {
+                string key = file.Path.ToLowerInvariant();
+                if (!archivesOf.TryGetValue(key, out SortedSet<string>? set)) archivesOf[key] = set = new SortedSet<string>();
+                set.Add(archive);
+            }
+            string ArchivesText(string path)
+            {
+                SortedSet<string>? set = archivesOf.GetValueOrDefault(path.ToLowerInvariant());
+                if (set == null || set.Count == 0) return "archivio ?";
+                return set.Count <= 5 ? string.Join(", ", set) : $"{set.Count} archivi: {string.Join(", ", set.Take(5))}...";
+            }
+
+            // Teletrasporti dei livelli originali di Crash 1 con le tessere (per confronto)
+            var originalLines = new List<string>();
+            foreach (var (path, file) in sw.ByPath.Where(e => (e.Key.StartsWith("maps/crash1/l102_") || e.Key.StartsWith("maps/crash1/l106_")) &&
+                                                              e.Key.EndsWith(".igz"))
+                                                  .OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                try
+                {
+                    byte[] data = file.Uncompress();
+                    if (!ContainsAscii(data, "BonusRoundTeleporter") && !ContainsAscii(data, "BonusRoundManager")) continue;
+                    IgzFile igz = new IgzFile(file.Path, data, file.GameVersion);
+                    DescribeTeleporters(igz, path, originalLines, null, null);
+                    foreach (Crash_BonusRoundManagerData m in igz.Objects.OfType<Crash_BonusRoundManagerData>())
+                        originalLines.Add($"  gestore delle tessere in {path}: script {MetaText(m._meta)}, contatori {HandleText(m._Game_Int_Variable_0x60)}, " +
+                                          $"{HandleText(m._Game_Int_Variable_0x68)}, {HandleText(m._Game_Int_Variable_0x70)}");
+                }
+                catch (Exception e)
+                {
+                    originalLines.Add($"  {path}: non letto ({e.Message})");
+                }
+            }
+            if (originalLines.Count == 0) originalLines.Add("  nessuno trovato (L102_JungleRollers, L106_RollingStones)");
+
+            // Gestore delle tessere nei dati dei personaggi (Crash_CharacterData.igz, ...)
+            var managerLines = new List<string>();
+            foreach (var (path, file) in sw.ByPath.Where(e => e.Key.EndsWith("_characterdata.igz")).OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    Dictionary<igObject, string> keys = ComponentKeys(igz);
+                    foreach (Crash_BonusRoundManagerData m in igz.Objects.OfType<Crash_BonusRoundManagerData>())
+                    {
+                        AddScript(m._meta);
+                        AddVariable(m._Game_Int_Variable_0x60);
+                        AddVariable(m._Game_Int_Variable_0x68);
+                        AddVariable(m._Game_Int_Variable_0x70);
+                        AddVariable(m._BonusRoundActive);
+                        managerLines.Add($"  {path} ({ArchivesText(path)}): componente {keys.GetValueOrDefault(m) ?? "?"}, " +
+                                         $"attivo {(m._bitfield._isEnabled ? "si'" : "no")}, script {MetaText(m._meta)}");
+                        managerLines.Add($"    contatori {HandleText(m._Game_Int_Variable_0x60)}, {HandleText(m._Game_Int_Variable_0x68)}, " +
+                                         $"{HandleText(m._Game_Int_Variable_0x70)}; bonus in corso {HandleText(m._BonusRoundActive)}; dati {HandleText(m._Component_Data)}");
+                        managerLines.Add($"    tag {HandleText(m._Entity_Tag_0x30)}, {HandleText(m._Entity_Tag_0x38)}, {HandleText(m._Entity_Tag_0x40)}; " +
+                                         $"variabili dei tag {HandleText(m._EntityTagVariable_id_zak9a186_variable)}, " +
+                                         $"{HandleText(m._EntityTagVariable_id_jp8n1zvm_variable)}, {HandleText(m._EntityTagVariable_id_k7diogjk_variable)}");
+                    }
+                }
+                catch (Exception e)
+                {
+                    managerLines.Add($"  {path}: non letto ({e.Message})");
+                }
+            }
+            if (managerLines.Count == 0) managerLines.Add("  nessuno: Crash_BonusRoundManagerData non c'e' nei dati dei personaggi");
+
+            // Un giro su script (vsc/), interfaccia (ui/) e dati dei personaggi: chi nomina i contatori, script che
+            // guardano l'anno del gioco, file dell'interfaccia con l'HUD delle tessere
+            var counterNames = variables.Values.Select(r => r.objectName).Where(n => !string.IsNullOrEmpty(n))
+                                        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var users = counterNames.ToDictionary(n => n, n => new List<string>(), StringComparer.OrdinalIgnoreCase);
+            var vscByName = new Dictionary<string, (string path, IgArchiveFile file)>(StringComparer.OrdinalIgnoreCase);
+            var yearFiles = new List<(string path, IgArchiveFile file)>();
+            var hudFiles = new List<(string path, IgArchiveFile file)>();
+            int scanned = 0, notRead = 0;
+            foreach (var (path, file) in sw.ByPath.OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                bool vsc = path.StartsWith("vsc/"), ui = path.StartsWith("ui/"), character = path.EndsWith("_characterdata.igz");
+                if (!path.EndsWith(".igz") || !(vsc || ui || character)) continue;
+                if (vsc) vscByName.TryAdd(NamespaceUtils.GetFileName(path, false), (path, file));
+                byte[] data;
+                try
+                {
+                    data = file.Uncompress();
+                }
+                catch
+                {
+                    notRead++;
+                    continue;
+                }
+                scanned++;
+                foreach (string counter in counterNames)
+                    if (ContainsAscii(data, counter)) users[counter].Add(path);
+                if (vsc && (ContainsAscii(data, "_year") || ContainsAscii(data, "Year"))) yearFiles.Add((path, file));
+                if (ui && (ContainsAscii(data, "BonusRoundTokens") || ContainsAscii(data, "bonusroundtokens"))) hudFiles.Add((path, file));
+            }
+
+            // HUD delle tessere (common_Crash_HUD_BonusRoundTokens) e radice dell'HUD (common_Crash_GUI_Hud)
+            var hudLines = new List<string>();
+            foreach (var (path, file) in hudFiles)
+            {
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    var widgets = igz.Objects.OfType<common_Crash_HUD_BonusRoundTokens>().ToList();
+                    hudLines.Add($"  {path} ({ArchivesText(path)}): {widgets.Count} elementi con le tessere");
+                    foreach (common_Crash_HUD_BonusRoundTokens w in widgets)
+                    {
+                        AddScript(w._meta);
+                        AddVariable(w._CountGameVar);
+                        string hidden = w._owner != null && w._owner._bitfieldStorage._hidden ? ", nascosto" : "";
+                        hudLines.Add($"    {PlaceablePath(w._owner)}{hidden}: contatore {HandleText(w._CountGameVar)}, effetto {HandleText(w._spawnedEffect)}, " +
+                                     $"numero {w._Int}, valori {FormatFloat(w._Float_0x38)} {FormatFloat(w._Float_0x3c)} {FormatFloat(w._Float_0x40)}, " +
+                                     $"script {MetaText(w._meta)}");
+                    }
+                    foreach (common_Crash_GUI_Hud root in igz.Objects.OfType<common_Crash_GUI_Hud>())
+                    {
+                        AddScript(root._meta);
+                        hudLines.Add($"    radice dell'HUD {PlaceablePath(root._owner)}: script {MetaText(root._meta)}");
+                    }
+                }
+                catch (Exception e)
+                {
+                    hudLines.Add($"  {path}: non letto ({e.Message})");
+                }
+            }
+            if (hudLines.Count == 0) hudLines.Add("  nessun file dell'interfaccia (ui/) nomina le tessere");
+
+            // Contatori e altre variabili del gioco: dove sono definite, valore iniziale, durata
+            var variableLines = new List<string>();
+            foreach (var group in variables.Values.GroupBy(r => r.namespaceName, StringComparer.OrdinalIgnoreCase))
+            {
+                string ns = group.Key;
+                var wanted = new HashSet<string>(group.Select(r => r.objectName), StringComparer.OrdinalIgnoreCase);
+                var candidates = sw.ByPath.Where(e => e.Key.EndsWith(".igz") && !e.Key.StartsWith("maps/") &&
+                                                      NameAliases(NamespaceUtils.GetFileName(e.Key, false).ToLowerInvariant())
+                                                          .Contains(ns.ToLowerInvariant()))
+                                          .OrderBy(e => e.Key, StringComparer.Ordinal).ToList();
+                if (candidates.Count == 0)
+                {
+                    foreach (string name in wanted) variableLines.Add($"  {ns}::{name}: il file {ns} non c'e' nel dump (fuori dal livello)");
+                    continue;
+                }
+                var (path, file) = candidates[0];
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    foreach (igObject obj in igz.Objects.Where(o => o.ObjectName != null &&
+                                                                    (wanted.Contains(o.ObjectName) ||
+                                                                     (o is CGameVariable && o.ObjectName.Contains("Bonus", StringComparison.OrdinalIgnoreCase)))))
+                    {
+                        variableLines.Add($"  {ns}::{obj.ObjectName}: {VariableText(obj)}" +
+                                          (wanted.Contains(obj.ObjectName!) ? "" : " (non usata dal livello)"));
+                    }
+                    foreach (string name in wanted.Where(n => !igz.Objects.Any(o => string.Equals(o.ObjectName, n, StringComparison.OrdinalIgnoreCase))))
+                        variableLines.Add($"  {ns}::{name}: NON C'E' in {path}");
+                    variableLines.Add($"    (definite in {path}, {ArchivesText(path)})");
+                }
+                catch (Exception e)
+                {
+                    variableLines.Add($"  {ns}: {path} non letto ({e.Message})");
+                }
+            }
+            if (variableLines.Count == 0) variableLines.Add("  nessuna");
+
+            // Script delle tessere scritti per esteso, poi quelli che guardano l'anno del gioco
+            var detail = new StringBuilder();
+            detail.AppendLine("TESSERE DEI BONUS DI CRASH 1: SCRIPT DEL GIOCO SWITCH");
+            detail.AppendLine($"gioco del livello: {game ?? "?"}");
+            detail.AppendLine("Ogni script: eventi (EVENTO: messaggio o funzione che lo fa partire), metodi, nodi. Ogni nodo ha un numero");
+            detail.AppendLine("(#n), il tipo e i valori che legge: costanti, campi (.nome: dei dati dello script o di un oggetto del gioco),");
+            detail.AppendLine("funzioni del gioco (fn), riferimenti (@file::oggetto). Sotto un nodo i suoi rami (nome:), poi il nodo che viene");
+            detail.AppendLine("dopo allo stesso livello; un nodo gia' scritto compare come -> #n.");
+            detail.AppendLine();
+            var tokenYearUses = new List<string>();
+            var dumped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var toDump = new SortedDictionary<string, IgArchiveFile>(StringComparer.Ordinal);
+            foreach (string name in _tokenScriptFiles.Concat(scriptNamespaces))
+                if (vscByName.TryGetValue(name, out var found)) toDump.TryAdd(found.path, found.file);
+            foreach (string name in _tokenScriptFiles.Concat(scriptNamespaces).Where(n => !vscByName.ContainsKey(n)).Distinct(StringComparer.OrdinalIgnoreCase))
+                detail.AppendLine($"script {name}: non trovato in vsc/ nel dump");
+            var rewriteLines = new List<string>();
+            foreach (var (path, file) in toDump)
+            {
+                detail.AppendLine($"===== {path} ({ArchivesText(path)})");
+                try
+                {
+                    byte[] raw = file.Uncompress();
+                    IgzFile igz = new IgzFile(file.Path, raw, file.GameVersion);
+                    var scripts = igz.Objects.OfType<igVscMetaObject>().ToList();
+                    if (scripts.Count == 0) detail.AppendLine("  nessuno script (igVscMetaObject) nel file");
+                    // quelli delle tessere per intero; HUD e gestore del livello (grandi, servono per l'anno) fino a 1500 righe
+                    bool core = path.Contains("bonus", StringComparison.OrdinalIgnoreCase);
+                    var dumper = new VscDumper(detail, igz.GameVersion) { MaxLines = core ? 4000 : 1500 };
+                    foreach (igVscMetaObject script in scripts) dumper.Dump(script, path);
+                    tokenYearUses.AddRange(dumper.Notes);
+                    // Prova di riscrittura: per correggere uno script bisogna poterlo riscrivere uguale
+                    string rewrite = RewriteCheck(igz, raw, path);
+                    detail.AppendLine("  " + rewrite);
+                    rewriteLines.Add($"  {NamespaceUtils.GetFileName(path, false)}: {rewrite}");
+                }
+                catch (Exception e)
+                {
+                    detail.AppendLine($"  non letto: {e.GetType().Name}: {e.Message}");
+                    rewriteLines.Add($"  {NamespaceUtils.GetFileName(path, false)}: non letto ({e.GetType().Name}: {e.Message})");
+                }
+                // quelli scritti per intero non si rileggono nel giro dell'anno; HUD e gestore del livello si' (troncati qui)
+                if (path.Contains("bonus", StringComparison.OrdinalIgnoreCase)) dumped.Add(path);
+                detail.AppendLine();
+            }
+
+            var yearScripts = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+            int yearParsed = 0, yearErrors = 0;
+            foreach (var (path, file) in yearFiles)
+            {
+                if (dumped.Contains(path)) continue;
+                if (++yearParsed > 800) break;
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    var dumper = new VscDumper(new StringBuilder(), igz.GameVersion) { MaxLines = int.MaxValue };
+                    foreach (igVscMetaObject script in igz.Objects.OfType<igVscMetaObject>()) dumper.Dump(script, path);
+                    var notes = dumper.Notes.Where(n => n.Contains("_year") || n.Contains("Year")).ToList();
+                    yearScripts[path] = notes.Count > 0 ? notes : new List<string> { "(\"_year\"/\"Year\" nel file, ma in nessun nodo raggiunto dagli eventi)" };
+                }
+                catch (Exception e)
+                {
+                    yearErrors++;
+                    yearScripts[path] = new List<string> { $"non letto: {e.GetType().Name}: {e.Message}" };
+                }
+            }
+
+            detail.AppendLine("===== NODI DEGLI SCRIPT DELLE TESSERE CHE GUARDANO LA ZONA O L'ANNO DEL GIOCO");
+            if (tokenYearUses.Count == 0) detail.AppendLine("  nessuno");
+            foreach (string line in tokenYearUses) detail.AppendLine("  " + line);
+            detail.AppendLine();
+            detail.AppendLine($"===== ALTRI SCRIPT CHE GUARDANO L'ANNO DEL GIOCO ({yearScripts.Count})");
+            foreach (var (path, notes) in yearScripts)
+            {
+                detail.AppendLine($"  {path} ({ArchivesText(path)})");
+                foreach (string note in notes.Take(30)) detail.AppendLine("    " + note);
+                if (notes.Count > 30) detail.AppendLine($"    ... e altri {notes.Count - 30}");
+            }
+            detail.AppendLine();
+            detail.AppendLine("===== FILE CHE NOMINANO I CONTATORI");
+            foreach (var (counter, files) in users)
+            {
+                detail.AppendLine($"  {counter}: {files.Count}");
+                foreach (string path in files) detail.AppendLine($"    {path} ({ArchivesText(path)})");
+            }
+
+            string detailPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(reportPath)) ?? ".",
+                                             Path.GetFileNameWithoutExtension(reportPath) + "_tessere.txt");
+            string? writeError = null;
+            try
+            {
+                File.WriteAllText(detailPath, detail.ToString());
+            }
+            catch (Exception e)
+            {
+                writeError = e.Message;
+            }
+
+            report.AppendLine("=== TESSERE DEI BONUS DI CRASH 1 (analisi) ===");
+            report.AppendLine($"Gioco del livello: {game ?? "?"}. Con --gioco crash3 le tessere prese non si contano e il bonus non parte:");
+            report.AppendLine("qui quello che il livello usa e dove sta nel gioco Switch. Gli script delle tessere scritti per esteso sono in");
+            report.AppendLine(writeError == null ? $"{Path.GetFileName(detailPath)}: allegalo insieme a questo rapporto."
+                                                 : $"{Path.GetFileName(detailPath)}, che pero' non si e' potuto scrivere ({writeError}).");
+            report.AppendLine($"teletrasporti dei bonus nel livello: {teleporterCount}");
+            foreach (string line in levelLines) report.AppendLine(line);
+            report.AppendLine("tessere nel livello (collezionabili): " +
+                              (tokenTypes.Count == 0 ? "nessuna" : string.Join(", ", tokenTypes.Select(e => $"{e.Key} {e.Value}"))));
+            if (otherBonus.Count > 0) report.AppendLine("altri componenti dei bonus: " + string.Join(", ", otherBonus.Select(e => $"{e.Key} {e.Value}")));
+            report.AppendLine("teletrasporti dei livelli originali di Crash 1 (per confronto):");
+            foreach (string line in originalLines) report.AppendLine(line);
+            report.AppendLine("gestore delle tessere nei dati dei personaggi (Crash_BonusRoundManagerData):");
+            foreach (string line in managerLines) report.AppendLine(line);
+            report.AppendLine("HUD delle tessere (common_Crash_HUD_BonusRoundTokens):");
+            foreach (string line in hudLines) report.AppendLine(line);
+            report.AppendLine("contatori e altre variabili del gioco usate (valore iniziale, durata):");
+            foreach (string line in variableLines) report.AppendLine(line);
+            report.AppendLine($"file del gioco che nominano i contatori (su {scanned} script, file dell'interfaccia e dati dei personaggi" +
+                              (notRead > 0 ? $", {notRead} non letti" : "") + "):");
+            foreach (var (counter, files) in users)
+                report.AppendLine($"  {counter}: " + (files.Count == 0 ? "nessuno" : string.Join(", ", files.Take(10)) + (files.Count > 10 ? $" e altri {files.Count - 10}" : "")));
+            report.AppendLine($"script delle tessere scritti per esteso: {toDump.Count} ({string.Join(", ", toDump.Keys.Select(p => NamespaceUtils.GetFileName(p, false)))})");
+            report.AppendLine("prova di riscrittura degli script delle tessere (letti, riscritti con l'editor e riletti):");
+            foreach (string line in rewriteLines) report.AppendLine(line);
+            report.AppendLine("nodi degli script delle tessere che guardano la zona o l'anno del gioco:");
+            if (tokenYearUses.Count == 0) report.AppendLine("  nessuno: il controllo, se c'e', e' nel codice del gioco o in un altro script");
+            foreach (string line in tokenYearUses.Take(40)) report.AppendLine("  " + line);
+            if (tokenYearUses.Count > 40) report.AppendLine($"  ... e altri {tokenYearUses.Count - 40} (nel file delle tessere)");
+            report.AppendLine($"altri script che guardano l'anno del gioco: {yearScripts.Count}" + (yearErrors > 0 ? $" ({yearErrors} non letti)" : "") +
+                              (yearScripts.Count > 0 ? ": " + string.Join(", ", yearScripts.Keys.Take(40).Select(p => NamespaceUtils.GetFileName(p, false))) +
+                                                       (yearScripts.Count > 40 ? "..." : "") : ""));
+            report.AppendLine();
+            return writeError == null ? detailPath : null;
+        }
+
+        private static string RefText(NamedReference? reference) =>
+            reference == null ? "-" : $"{reference.namespaceName}::{reference.objectName}";
+
+        private static string HandleText(igHandleMetaField? handle) => RefText(handle?.Reference);
+
+        private static string MetaText(igObject? meta) =>
+            meta == null ? "-" : meta.Reference != null ? RefText(meta.Reference) : meta.ObjectName ?? meta.GetType().Name;
+
+        /// <summary>
+        /// Fixup di un igz letti dai byte (tipi, riferimenti, dipendenze); null se non si leggono
+        /// </summary>
+        private static FixupCollection? ParseFixups(byte[] data)
+        {
+            try
+            {
+                if (data.Length < 0x24 || BitConverter.ToUInt32(data, 0) != 0x49475A01) return null;
+                using var reader = new BinaryReader(new MemoryStream(data));
+                reader.BaseStream.Position = BitConverter.ToInt32(data, 0x18);
+                return FixupCollection.Parse(reader);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Prova di riscrittura di un file di script VSC: lo riscrive con l'editor e lo rilegge. Dice se il grafo (scritto
+        /// come nel file delle tessere), i tipi, i riferimenti esterni e le dipendenze restano uguali
+        /// </summary>
+        private static string RewriteCheck(IgzFile igz, byte[] original, string path)
+        {
+            try
+            {
+                static string Graph(IgzFile file, string fileName)
+                {
+                    var text = new StringBuilder();
+                    var dumper = new VscDumper(text, file.GameVersion) { MaxLines = int.MaxValue };
+                    foreach (igVscMetaObject script in file.Objects.OfType<igVscMetaObject>()) dumper.Dump(script, fileName);
+                    return text.ToString();
+                }
+                static string? Difference(IEnumerable<string> before, IEnumerable<string> after, string what)
+                {
+                    var a = new HashSet<string>(before);
+                    var b = new HashSet<string>(after);
+                    var onlyBefore = a.Except(b).Take(5).ToList();
+                    var onlyAfter = b.Except(a).Take(5).ToList();
+                    if (onlyBefore.Count == 0 && onlyAfter.Count == 0) return null;
+                    return $"{what} diversi (solo nell'originale: {string.Join(", ", onlyBefore)}; solo nella riscrittura: {string.Join(", ", onlyAfter)})";
+                }
+
+                string graphBefore = Graph(igz, path);
+                int objectsBefore = igz.Objects.Count;
+                igz.GameVersion = GameVersion.NSX;
+                byte[] saved = igz.Save();
+                var again = new IgzFile(path, saved, GameVersion.NSX);
+                string graphAfter = Graph(again, path);
+
+                var problems = new List<string>();
+                if (graphBefore != graphAfter)
+                {
+                    string[] a = graphBefore.Split('\n'), b = graphAfter.Split('\n');
+                    int line = 0;
+                    while (line < a.Length && line < b.Length && a[line] == b[line]) line++;
+                    problems.Add($"grafo diverso dalla riga {line + 1} (prima: '{(line < a.Length ? a[line].Trim() : "-")}', " +
+                                 $"dopo: '{(line < b.Length ? b[line].Trim() : "-")}')");
+                }
+                if (again.Objects.Count != objectsBefore) problems.Add($"oggetti {objectsBefore} -> {again.Objects.Count}");
+                FixupCollection? fixupsBefore = ParseFixups(original), fixupsAfter = ParseFixups(saved);
+                if (fixupsBefore == null || fixupsAfter == null)
+                {
+                    problems.Add("fixup non leggibili");
+                }
+                else
+                {
+                    string?[] differences =
+                    [
+                        Difference(fixupsBefore.TMET, fixupsAfter.TMET, "tipi"),
+                        Difference(fixupsBefore.objectReferences.Select(r => RefText(r)), fixupsAfter.objectReferences.Select(r => RefText(r)), "riferimenti"),
+                        Difference(fixupsBefore.handleReferences.Select(r => RefText(r)), fixupsAfter.handleReferences.Select(r => RefText(r)), "handle"),
+                        Difference(fixupsBefore.exidReferences.Select(r => RefText(r)), fixupsAfter.exidReferences.Select(r => RefText(r)), "riferimenti per hash"),
+                        Difference(fixupsBefore.TDEP.Select(d => d.path ?? ""), fixupsAfter.TDEP.Select(d => d.path ?? ""), "dipendenze"),
+                    ];
+                    problems.AddRange(differences.Where(d => d != null).Select(d => d!));
+                }
+                return problems.Count == 0
+                    ? $"riscrittura uguale ({original.Length} -> {saved.Length} byte)"
+                    : $"riscrittura DIVERSA ({original.Length} -> {saved.Length} byte): {string.Join("; ", problems)}";
+            }
+            catch (Exception e)
+            {
+                return $"riscrittura non riuscita: {e.GetType().Name}: {e.Message}";
+            }
+        }
+
+        private static bool ContainsAscii(byte[] data, string text) =>
+            data.AsSpan().IndexOf(new ReadOnlySpan<byte>(Encoding.ASCII.GetBytes(text))) >= 0;
+
+        /// <summary>
+        /// Teletrasporti dei bonus di Crash 1 (common_BonusRoundTeleporterData) di un file: entita', tipo, tag, contatori,
+        /// effetti, script. Restituisce quanti sono
+        /// </summary>
+        private static int DescribeTeleporters(IgzFile igz, string path, List<string> lines, Action<igObject?>? addScript,
+                                               Action<igHandleMetaField?>? addVariable)
+        {
+            var owners = new Dictionary<igObject, igEntity>(ReferenceEqualityComparer.Instance);
+            foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                foreach (igComponentData component in entity.GetComponents())
+                    owners.TryAdd(component, entity);
+
+            int count = 0;
+            foreach (common_BonusRoundTeleporterData t in igz.Objects.OfType<common_BonusRoundTeleporterData>())
+            {
+                count++;
+                addScript?.Invoke(t._meta);
+                addVariable?.Invoke(t._Game_Int_Variable_0x50);
+                addVariable?.Invoke(t._Game_Int_Variable_0x58);
+                addVariable?.Invoke(t._Game_Int_Variable_0x60);
+                addVariable?.Invoke(t._Game_Bool_Variable_0x40);
+                addVariable?.Invoke(t._Game_Bool_Variable_0x68);
+                igEntity? owner = owners.GetValueOrDefault(t);
+                string position = owner == null ? "-" : $"{FormatFloat(owner._parentSpacePosition._x)} {FormatFloat(owner._parentSpacePosition._y)} {FormatFloat(owner._parentSpacePosition._z)}";
+                lines.Add($"  teletrasporto {owner?.ObjectName ?? "(senza entita')"} ({path}): tipo {t._NewEnum2_id_9tewcwq5}, " +
+                          $"tag {EntityTagsText(owner)}, posizione {position}, componente attivo {(t._bitfield._isEnabled ? "si'" : "no")}");
+                lines.Add($"    contatori {HandleText(t._Game_Int_Variable_0x50)}, {HandleText(t._Game_Int_Variable_0x58)}, " +
+                          $"{HandleText(t._Game_Int_Variable_0x60)}; si'/no {HandleText(t._Game_Bool_Variable_0x40)}, " +
+                          $"{HandleText(t._Game_Bool_Variable_0x68)}; checkpoint {HandleText(t._Entity)}");
+                lines.Add($"    effetti {HandleText(t._Vfx_Effect_0x28)}, {HandleText(t._Vfx_Effect_0x48)}, {HandleText(t._Vfx_Effect_0x70)}; " +
+                          $"materiali {HandleText(t._Fx_Material_Redirect_Table_0x38)}, {HandleText(t._Fx_Material_Redirect_Table_0x80)}; " +
+                          $"script {MetaText(t._meta)}");
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Tag di un'entita' (CEntityData._tags), separati da virgole
+        /// </summary>
+        private static string EntityTagsText(igEntity? entity)
+        {
+            if (entity?._entityData is not CEntityData data || data._tags == null) return "-";
+            var names = data._tags.Dict.Keys.Select(tag => tag.Reference?.objectName ?? tag._name ?? tag.ObjectName ?? "?").ToList();
+            return names.Count == 0 ? "-" : string.Join(",", names);
+        }
+
+        /// <summary>
+        /// Componenti dei dati delle entita' di un file -> "dati/chiave del componente"
+        /// </summary>
+        private static Dictionary<igObject, string> ComponentKeys(IgzFile igz)
+        {
+            var keys = new Dictionary<igObject, string>(ReferenceEqualityComparer.Instance);
+            foreach (igEntityData data in igz.Objects.OfType<igEntityData>())
+            {
+                if (data._componentData == null) continue;
+                foreach (var (key, component) in data._componentData.Dict)
+                    if (component != null) keys.TryAdd(component, $"{data.ObjectName ?? "?"}/{key}");
+            }
+            return keys;
+        }
+
+        /// <summary>
+        /// Percorso di un elemento dell'interfaccia (nomi dei genitori, al massimo 6)
+        /// </summary>
+        private static string PlaceablePath(igGuiPlaceable? placeable)
+        {
+            var names = new List<string>();
+            for (int i = 0; placeable != null && i < 6; i++, placeable = placeable._parent)
+                names.Insert(0, placeable._name ?? placeable.ObjectName ?? "?");
+            return names.Count == 0 ? "?" : string.Join("/", names);
+        }
+
+        private static string VariableText(igObject obj) => obj switch
+        {
+            CGameIntVariable v => $"numero, valore iniziale {v._defaultValue}, durata {v._variableLifetime}, salvataggio automatico {(v._triggerAutoSave ? "si'" : "no")}",
+            CGameBoolVariable v => $"si'/no, valore iniziale {(v._defaultValue ? "si'" : "no")}, durata {v._variableLifetime}",
+            CGameFloatVariable v => $"decimale, valore iniziale {FormatFloat(v._defaultValue)}, durata {v._variableLifetime}",
+            CGameVariable v => $"{v.GetType().Name}, durata {v._variableLifetime}",
+            _ => obj.GetType().Name
+        };
+
+        /// <summary>
+        /// Scrive uno script VSC (igVscMetaObject) come grafo: eventi (delegator), metodi, nodi con i valori che leggono
+        /// (costanti, campi, funzioni del gioco, riferimenti) e i loro rami. Ogni nodo ha un numero (#n); uno gia' scritto
+        /// compare come "-> #n". Notes: i nodi che guardano la zona o l'anno del gioco (_year, ...Year..., ...ZoneInfo...)
+        /// </summary>
+        private sealed class VscDumper
+        {
+            private static readonly HashSet<string> _skip =
+            [
+                "__objectType", "__referenceCount", "_dynamicFieldMemory", "_instancedNodes", "_vTablePointer", "_library",
+                "_lastChild", "_nextSibling", "_parent", "_metaFunctions", "_attributes", "_instanceCount",
+            ];
+            private readonly StringBuilder _sb;
+            private readonly GameVersion _version;
+            private readonly Dictionary<object, int> _ids = new(ReferenceEqualityComparer.Instance);
+            private int _next;
+            private int _lines;
+            private bool _truncated;
+            private string _script = "";
+            public int MaxLines = 4000;
+            public readonly List<string> Notes = [];
+
+            public VscDumper(StringBuilder sb, GameVersion version)
+            {
+                _sb = sb;
+                _version = version;
+            }
+
+            public void Dump(igVscMetaObject script, string file)
+            {
+                _script = script._name ?? script.ObjectName ?? NamespaceUtils.GetFileName(file, false);
+                _lines = 0;
+                _truncated = false;
+                Line(0, $"SCRIPT {_script}");
+                if (script._dataMeta != null)
+                {
+                    Line(1, "dati: " + (Describe(script._dataMeta, 0) ?? "?"));
+                    if (script._dataMeta.Reference == null && script._dataMeta._metaFields.Count > 0)
+                    {
+                        var fields = script._dataMeta._metaFields._data.Where(f => f != null)
+                                                                       .Select(f => $"{f._fieldName ?? f.ObjectName ?? "?"}({f.GetType().Name.Replace("MetaFieldInstance", "").Replace("MetaField", "")})");
+                        Line(2, "campi: " + string.Join(" ", fields));
+                    }
+                }
+                foreach (igVscDelegator delegator in Items(script._delegators)) Chain(delegator, 1, "EVENTO ");
+                foreach (igVscDelegator delegator in Items(script._privateMessageDelegatorList)) Chain(delegator, 1, "EVENTO PRIVATO ");
+                foreach (igVscMethod method in Items(script._exposedMethods)) Chain(method, 1, "METODO ");
+            }
+
+            private static IEnumerable<T> Items<T>(igObjectList<T>? list) where T : igObject
+            {
+                if (list == null) yield break;
+                foreach (T? item in list._data)
+                    if (item != null) yield return item;
+            }
+
+            private void Line(int depth, string text)
+            {
+                if (_truncated) return;
+                if (_lines >= MaxLines)
+                {
+                    _sb.Append(' ', depth * 2).AppendLine($"... (troncato dopo {MaxLines} righe)");
+                    _truncated = true;
+                    return;
+                }
+                _sb.Append(' ', depth * 2).AppendLine(text);
+                _lines++;
+            }
+
+            /// <summary>
+            /// Un nodo e quelli che vengono dopo (_out, _node), allo stesso livello
+            /// </summary>
+            private void Chain(object? node, int depth, string prefix = "")
+            {
+                // rami dentro rami: oltre 60 livelli si ferma (la ricorsione non deve finire lo stack)
+                if (depth > 120)
+                {
+                    if (node != null && !_ids.ContainsKey(node)) Line(depth, $"{prefix}... (rami troppo profondi, non scritti)");
+                    return;
+                }
+                int guard = 0;
+                while (node != null && !_truncated && guard++ < 100000)
+                {
+                    if (_ids.TryGetValue(node, out int seen))
+                    {
+                        Line(depth, $"{prefix}-> #{seen}");
+                        return;
+                    }
+                    node = One(node, depth, prefix);
+                    prefix = "";
+                }
+            }
+
+            private object? One(object node, int depth, string prefix)
+            {
+                int id = ++_next;
+                _ids[node] = id;
+                string named = node is igObject named0 && named0.ObjectName != null ? $" '{named0.ObjectName}'" : "";
+
+                if (node is igVscMethod method)
+                {
+                    Line(depth, $"{prefix}#{id} metodo{named}");
+                    foreach (igVscEntryPointNode entry in Items(method._nodes)) Chain(entry, depth + 1, "INGRESSO ");
+                    return null;
+                }
+
+                var parameters = new List<string>();
+                var flows = new List<(string name, object value)>();
+                if (node is igObjectBase obj)
+                {
+                    foreach (CachedFieldAttr field in obj.GetFields(_version))
+                    {
+                        string name = field.GetName();
+                        if (_skip.Contains(name)) continue;
+                        object? value;
+                        try
+                        {
+                            value = field.GetValue(node);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+                        if (value == null) continue;
+                        if (IsFlow(value))
+                        {
+                            flows.Add((name, value));
+                            continue;
+                        }
+                        if (value is bool flag && !flag && (name == "_isHandle" || name == "_isDelegatorTarget")) continue;
+                        string? text = Describe(value, 1);
+                        if (!string.IsNullOrEmpty(text)) parameters.Add($"{name.TrimStart('_')}={text}");
+                    }
+                }
+                string line = $"{prefix}#{id} {ShortType(node)}{named}" + (parameters.Count > 0 ? " " + string.Join(" ", parameters) : "");
+                Line(depth, line);
+
+                object? next = null;
+                var branches = new List<string>();
+                foreach (var (name, value) in flows)
+                {
+                    var targets = Targets(name, value).ToList();
+                    if (next == null && targets.Count == 1 && (name == "_out" || name == "_node") && targets[0].target is not igVscMethod)
+                    {
+                        next = targets[0].target;
+                        continue;
+                    }
+                    foreach (var (label, target) in targets)
+                    {
+                        Line(depth + 1, label + ":");
+                        Chain(target, depth + 2);
+                        branches.Add($"{label} -> {(_ids.TryGetValue(target, out int t) ? "#" + t : "?")} {ShortType(target)}");
+                    }
+                }
+                if (line.Contains("_year") || line.Contains("Year") || line.Contains("ZoneInfo") || line.Contains("zoneInfo"))
+                {
+                    if (next != null) branches.Add($"dopo -> {ShortType(next)}");
+                    Notes.Add($"{_script}: {line.Trim()}" + (branches.Count > 0 ? " | " + string.Join("; ", branches) : ""));
+                }
+                return next;
+            }
+
+            private static bool IsFlowObject(object? value) =>
+                value is igVscActionNode || value is igVscMethod || (value is igVscPlaceable && value is not igVscAccessor);
+
+            private static bool IsFlow(object value) =>
+                IsFlowObject(value) || value is igEnumVscActionNodeHashTable || value is igVscActionNodeList ||
+                value is igVscEntryPointNodeList || value is igVscMethodList;
+
+            private static IEnumerable<(string label, object target)> Targets(string name, object value)
+            {
+                string label = name.TrimStart('_');
+                if (IsFlowObject(value))
+                {
+                    yield return (label, value);
+                    yield break;
+                }
+                if (value is igEnumVscActionNodeHashTable table)
+                {
+                    foreach (var (key, target) in table.Dict.OrderBy(e => e.Key))
+                        if (target != null && IsFlowObject(target)) yield return ($"{label}[{key}]", target);
+                    yield break;
+                }
+                int index = 0;
+                foreach (object item in DataItems(value))
+                {
+                    if (IsFlowObject(item)) yield return ($"{label}[{index}]", item);
+                    index++;
+                }
+            }
+
+            private static IEnumerable<object> DataItems(object list)
+            {
+                if (list.GetType().GetField("_data")?.GetValue(list) is IEnumerable items)
+                    foreach (object? item in items)
+                        if (item != null) yield return item;
+            }
+
+            private static string ShortType(object node)
+            {
+                string name = node.GetType().Name;
+                if (node is igVscMacroCallNode && name != nameof(igVscMacroCallNode)) return "Macro " + name;
+                if (name.StartsWith("igVsc")) name = name.Substring(5);
+                if (name.EndsWith("Accessor") && name.Length > 8) name = name.Substring(0, name.Length - 8);
+                else if (name.EndsWith("Node") && name.Length > 4) name = name.Substring(0, name.Length - 4);
+                return name;
+            }
+
+            private IEnumerable<string> Fields(igObjectBase obj, int depth)
+            {
+                foreach (CachedFieldAttr field in obj.GetFields(_version))
+                {
+                    string name = field.GetName();
+                    if (_skip.Contains(name)) continue;
+                    object? value;
+                    try
+                    {
+                        value = field.GetValue(obj);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                    if (value == null) continue;
+                    if (value is bool flag && !flag && (name == "_isHandle" || name == "_isDelegatorTarget")) continue;
+                    string? text = Describe(value, depth);
+                    if (!string.IsNullOrEmpty(text)) yield return $"{name.TrimStart('_')}={text}";
+                }
+            }
+
+            private string? Describe(object? value, int depth)
+            {
+                switch (value)
+                {
+                    case null:
+                        return null;
+                    case string text:
+                        return "\"" + text + "\"";
+                    case bool flag:
+                        return flag ? "si" : "no";
+                    case float number:
+                        return number.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+                    case Enum choice:
+                        return choice.ToString();
+                    case igHandleMetaField handle:
+                        return handle.Reference == null ? null : "@" + RefText(handle.Reference);
+                    case igRawRefMetaField:
+                        return null;
+                    case NamedReference reference:
+                        return RefText(reference);
+                }
+                Type type = value.GetType();
+                if (type.IsPrimitive) return System.Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+                if (value is igObject obj)
+                {
+                    string? name = obj.Reference?.objectName ?? obj.ObjectName;
+                    switch (obj)
+                    {
+                        case igMetaFieldInstance field:
+                            return "." + (field._fieldName ?? name ?? "?");
+                        case igMetaFunction function:
+                            return "fn " + (function._functionName ?? name ?? "?") +
+                                   (obj.Reference != null && !string.IsNullOrEmpty(obj.Reference.namespaceName) ? $"[{obj.Reference.namespaceName}]" : "");
+                        case igBaseMeta meta:
+                            return "tipo " + (meta._name ?? name ?? "?");
+                    }
+                    if (obj.Reference != null) return "@" + RefText(obj.Reference);
+                    if (IsFlowObject(obj)) return _ids.TryGetValue(obj, out int id) ? "#" + id : ShortType(obj);
+                    if (depth > 6) return ShortType(obj) + "(...)";
+                    if (obj is igVscAccessor) return ShortType(obj) + "(" + string.Join(" ", Fields(obj, depth + 1)) + ")";
+                    if (obj is igDataList)
+                        return "[" + string.Join(", ", DataItems(obj).Take(16).Select(item => Describe(item, depth + 1) ?? "-")) + "]";
+                    return ShortType(obj) + (name != null ? $" '{name}'" : "");
+                }
+                if (type.GetField("_data") != null)
+                    return "[" + string.Join(", ", DataItems(value).Take(16).Select(item => Describe(item, depth + 1) ?? "-")) + "]";
+                if (value is igObjectBase other && depth <= 6)
+                    return "(" + string.Join(" ", Fields(other, depth + 1)) + ")";
+                return value.ToString();
             }
         }
 
