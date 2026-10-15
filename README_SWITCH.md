@@ -56,7 +56,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]...
         [--originale-switch <testo>]... [--tessere-solo-crash1] [--tessere-senza-hud]
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
-        [--intro-come-editor] [--intro-scostamento <numero>] [--intro-posizione-originale]
+        [--intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>]
+        [--intro-evento <nome>] [--intro-senza-portale] [--intro-posizione-originale]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
@@ -211,6 +212,25 @@ Dettagli:
     livello nuovo di Crash 3 (evento `Cutscene_Crash2_Portal_Exit_Victory`, 1, 1, 2.45, 300);
   - `--intro-posizione-originale`: l'intro aggiunta resta dove sta in Gone Tomorrow, come fino
     alla v51 (per confronto).
+  Intro come in Crash 2 (prova, dalla v53): nei livelli di Crash 1 e 2 l'intro (Crash che si
+  materializza alla partenza) non è un oggetto del livello: la fa il gioco, con l'intro "magic
+  moment" della zone info. Con la zone info di Crash 3 quella intro il gioco non la fa: aspetta
+  l'intro di Crash 3 del livello, ed è quella a far comparire Crash. Se le regole di Crash 3 non
+  servono, `--gioco crash2` dà l'intro vera di Crash 2. Con `--gioco crash3`:
+  - `--intro-crash2`: l'intro di Crash 3 resta (serve a far comparire Crash) ma senza il portale,
+    con "Spawn offset" e "Animation offset" a 0 e con l'animazione di comparsa di Crash 2, se il
+    convertitore la riconosce nei dati delle animazioni di comparsa di Crash
+    (`Crash_RespawnAnimationManagerData` in `Crash_CharacterData.igz`: il testo che nomina Crash 2);
+    altrimenti resta quella dell'intro (`Cutscene_Crash2_Portal_Exit_Victory`, anche quella di
+    Crash 2). Vale anche per l'intro che il livello ha già;
+  - `--intro-evento <nome>`: l'animazione con cui compare Crash (evento del comportamento di Crash,
+    "BehaviorEventCrashIntro" nell'editor), per provarne un'altra;
+  - `--intro-senza-portale`: l'intro senza l'effetto del portale.
+  Il rapporto dice cosa è stato cambiato. Il file `<rapporto>_intro.txt` ha anche come comincia
+  un livello negli altri giochi: i dati delle animazioni di comparsa dei personaggi, i nomi di
+  animazioni ed eventi di comparsa nei file di Crash (`crash.pak`), gli effetti con portali o
+  comparse, la partenza di Turtle Woods, Snow Go e N. Sanity Beach (componenti della partenza ed
+  entità vicine) e gli script delle animazioni di comparsa di Crash e del gestore del livello.
   La sezione `INTRO DI CRASH 3 (analisi)` (dalla v52) dice cosa è stato copiato e spostato, con i
   valori dell'intro, dove stanno l'intro e le partenze del livello e, per confronto, quelle di
   alcuni livelli originali di Crash 3 (distanza e posizione rispetto alla partenza). Il file

@@ -114,6 +114,14 @@ namespace NST
             // converti: l'intro di Crash 3 aggiunta dal convertitore resta dov'e' in Gone Tomorrow, come fino alla v51 (dalla v52
             // si sposta alla partenza del livello)
             public bool IntroKeepPosition;
+            // converti: intro "come in Crash 2" (prova, dalla v53): l'intro di Crash 3, che con la zone info di Crash 3 serve a far
+            // comparire Crash, senza il portale, con Spawn offset e Animation offset a 0 e con l'animazione di comparsa di Crash 2
+            // presa dai dati di Crash (Crash_RespawnAnimationManager), se si riconosce
+            public bool IntroCrash2;
+            // converti: evento di Crash dell'intro di Crash 3 (_BehaviorEventCrashIntro, l'animazione con cui compare) (dalla v53)
+            public string? IntroEvent;
+            // converti: l'intro di Crash 3 senza l'effetto del portale (_Vfx_Effect) (dalla v53)
+            public bool IntroNoPortal;
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
             public string Reflections = "auto";
@@ -133,7 +141,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento",
+            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento", "--intro-evento",
         ];
 
         public static int Run(string[] args)
@@ -233,6 +241,9 @@ namespace NST
                 else if (name == "--tessere-senza-hud") { options.TokensNoHud = true; rest.RemoveAt(i); }
                 else if (name == "--intro-come-editor") { options.IntroLikeEditor = true; rest.RemoveAt(i); }
                 else if (name == "--intro-posizione-originale") { options.IntroKeepPosition = true; rest.RemoveAt(i); }
+                else if (name == "--intro-crash2") { options.IntroCrash2 = true; rest.RemoveAt(i); }
+                else if (name == "--intro-senza-portale") { options.IntroNoPortal = true; rest.RemoveAt(i); }
+                else if (name == "--intro-evento" && hasValue) { options.IntroEvent = rest[i + 1]; rest.RemoveRange(i, 2); }
                 else if (name == "--intro-scostamento" && hasValue)
                 {
                     if (float.TryParse(rest[i + 1].Replace(',', '.'), System.Globalization.NumberStyles.Float,
@@ -290,7 +301,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-posizione-originale] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-posizione-originale] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2165,6 +2176,21 @@ namespace NST
             (float x, float y, float z)? playerStart = null;  // partenza del livello (rapporto)
             var introLines = new List<string>();               // intro di Crash 3: aggiunta, cambiata (rapporto)
             bool introAdded = false;
+            // --intro-crash2: animazione di comparsa di Crash 2 dai dati di Crash (se non c'e' --intro-evento)
+            string? introC2Event = null;
+            if (options.IntroCrash2 && !options.WithoutIntro && options.IntroEvent == null)
+            {
+                try
+                {
+                    var c2Found = C2RespawnEvent(sw);
+                    introC2Event = c2Found.eventName;
+                    introLines.Add("--intro-crash2: " + c2Found.reason);
+                }
+                catch (Exception e)
+                {
+                    introLines.Add($"--intro-crash2: animazione di Crash 2 non cercata ({e.GetType().Name}: {e.Message}), resta quella dell'intro");
+                }
+            }
             var switchOriginalUsed = new List<string>();
             var usedFilters = new HashSet<string>();
             var modifiedOtherFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2461,14 +2487,13 @@ namespace NST
                         // l'ha gia' lo dice levelHasC3Intro, calcolato prima della conversione
                         bool hasIntro = igz.Objects.OfType<igEntity>().Any(e => e.GetComponent<common_C3_IntroSequenceData>() != null);
 
-                        // --intro-scostamento: "Spawn offset" anche dell'intro che il livello ha gia'
-                        if (hasIntro && !options.WithoutIntro && options.IntroSpawnOffset != null)
+                        // --intro-crash2, --intro-scostamento, --intro-evento, --intro-senza-portale: anche per l'intro che il livello ha gia'
+                        if (hasIntro && !options.WithoutIntro)
                         {
                             foreach (common_C3_IntroSequenceData data in igz.Objects.OfType<common_C3_IntroSequenceData>())
                             {
-                                introLines.Add($"intro gia' nel livello ({target}): Spawn offset {FormatFloat(data._Float_0x4c)} -> " +
-                                               $"{FormatFloat(options.IntroSpawnOffset.Value)} (--intro-scostamento)");
-                                data._Float_0x4c = options.IntroSpawnOffset.Value;
+                                string? changed = ApplyIntroOptions(data, options, introC2Event);
+                                if (changed != null) introLines.Add($"intro gia' nel livello ({target}): {changed}");
                             }
                         }
 
@@ -2733,7 +2758,8 @@ namespace NST
                             {
                                 var introDetails = new List<string>();
                                 List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, options.IntroLikeEditor, options.IntroKeepPosition,
-                                                                            options.IntroSpawnOffset, out string introInfo, introDetails);
+                                                                            data => ApplyIntroOptions(data, options, introC2Event),
+                                                                            out string introInfo, introDetails);
                                 levelHasC3Intro = true;
                                 introAdded = true;
                                 Increment(counters, "intro di Crash 3 aggiunta");
@@ -3496,13 +3522,14 @@ namespace NST
             }
             // Intro di Crash 3: dove fa comparire Crash rispetto alla partenza, dettagli in <rapporto>_intro.txt
             string? introPath = null;
-            bool introOptions = options.IntroLikeEditor || options.IntroKeepPosition || options.IntroSpawnOffset != null;
+            bool introOptions = options.IntroLikeEditor || options.IntroKeepPosition || options.IntroSpawnOffset != null ||
+                                options.IntroCrash2 || options.IntroEvent != null || options.IntroNoPortal;
             if (options.WithoutIntro)
             {
                 if (introOptions)
                 {
                     report.AppendLine("=== INTRO DI CRASH 3 ===");
-                    report.AppendLine("  --intro-come-editor, --intro-scostamento e --intro-posizione-originale ignorate: c'e' --senza-intro");
+                    report.AppendLine("  opzioni dell'intro (--intro-...) ignorate: c'e' --senza-intro");
                     report.AppendLine();
                 }
             }
@@ -3511,8 +3538,9 @@ namespace NST
                 if (!introAdded && (options.IntroLikeEditor || options.IntroKeepPosition))
                     introLines.Add("--intro-come-editor e --intro-posizione-originale valgono solo per l'intro aggiunta dal convertitore: " +
                                    (levelHasC3Intro ? "il livello ce l'aveva gia', resta com'e'" : "qui non e' stata aggiunta (serve --gioco crash3 o --aggiungi-intro)"));
-                if (options.IntroSpawnOffset != null && !levelHasC3Intro)
-                    introLines.Add("--intro-scostamento ignorata: il livello non ha l'intro di Crash 3");
+                if ((options.IntroSpawnOffset != null || options.IntroCrash2 || options.IntroEvent != null || options.IntroNoPortal) && !levelHasC3Intro)
+                    introLines.Add("--intro-crash2, --intro-scostamento, --intro-evento e --intro-senza-portale ignorate: il livello non ha l'intro di Crash 3 " +
+                                   "(con la zone info di Crash 1 o 2 il gioco usa la sua intro)");
                 try
                 {
                     Console.WriteLine("Controllo l'intro di Crash 3...");
@@ -3949,7 +3977,8 @@ namespace NST
         /// Copia nel file principale del livello l'intro dei livelli di Crash 3 (IntroCutsceneSequencePlayer di
         /// L321_GoneTomorrow, dal dump Switch). Impostazioni: come l'editor per un livello nuovo di Crash 3 (LevelBuilder),
         /// oppure, con likeEditor, come l'editor quando passi a Crash 3 un livello che c'e' gia' (GameplayModeManager.
-        /// AddC3IntroCutscene: valori di Gone Tomorrow, Animation delay 0.5); spawnOffset cambia lo "Spawn offset". Le entita'
+        /// AddC3IntroCutscene: valori di Gone Tomorrow, Animation delay 0.5); adjust applica le opzioni dell'intro (--intro-crash2,
+        /// --intro-scostamento, --intro-evento, --intro-senza-portale) e dice cosa ha cambiato. Le entita'
         /// copiate (l'intro e quelle del file di Gone Tomorrow a cui rimanda) passano dalla partenza di Gone Tomorrow a quella del
         /// livello, nella stessa posizione rispetto alla partenza (con keepPosition restano dove sono in Gone Tomorrow, come fino
         /// alla v51: in un altro livello sono in un punto qualsiasi). Una partenza o un mondo di Gone Tomorrow copiati perche'
@@ -3957,7 +3986,7 @@ namespace NST
         /// all'intro (script, comportamenti, ...); in details le righe per il rapporto
         /// </summary>
         private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, bool likeEditor, bool keepPosition,
-                                                      float? spawnOffset, out string info, List<string> details)
+                                                      Func<common_C3_IntroSequenceData, string?>? adjust, out string info, List<string> details)
         {
             string pakPath = PakFiles(switchDir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals("l321_gonetomorrow", StringComparison.OrdinalIgnoreCase))
                              ?? throw new FileNotFoundException("l321_gonetomorrow.pak non trovato nel dump Switch");
@@ -4002,11 +4031,9 @@ namespace NST
                 else if (player != null) player._CutsceneSequenceShotList.Reference = null;
                 settings = "come l'editor per un livello nuovo di Crash 3";
             }
-            if (spawnOffset != null)
-            {
-                introData._Float_0x4c = spawnOffset.Value;
-                settings += $", Spawn offset {FormatFloat(spawnOffset.Value)} (--intro-scostamento)";
-            }
+            // opzioni dell'intro prima della copia: senza il portale non si copiano i suoi file
+            string? adjusted = adjust?.Invoke(introData);
+            if (adjusted != null) settings += "; poi " + adjusted;
             details.Add($"impostazioni: {settings}");
             details.Add($"  {IntroValuesText(introData)}");
 
@@ -4083,6 +4110,103 @@ namespace NST
 
             info = $"da {sourceFile.Path}, {dependencies.Count} file collegati";
             return dependencies;
+        }
+
+        /// <summary>
+        /// Opzioni dell'intro di Crash 3 (aggiunta o gia' nel livello): --intro-evento (animazione con cui compare Crash),
+        /// --intro-senza-portale (niente effetto del portale), --intro-scostamento (Spawn offset) e --intro-crash2 (tutte e tre per
+        /// fare un'intro come quella di Crash 2: animazione di comparsa di Crash 2 se trovata, niente portale, Spawn offset e
+        /// Animation offset a 0). Dice cosa ha cambiato, null se niente
+        /// </summary>
+        private static string? ApplyIntroOptions(common_C3_IntroSequenceData data, Options options, string? c2Event)
+        {
+            var changes = new List<string>();
+            string? newEvent = options.IntroEvent ?? (options.IntroCrash2 ? c2Event : null);
+            if (newEvent != null && newEvent != data._BehaviorEventCrashIntro)
+            {
+                changes.Add($"evento '{data._BehaviorEventCrashIntro}' -> '{newEvent}' ({(options.IntroEvent != null ? "--intro-evento" : "--intro-crash2")})");
+                data._BehaviorEventCrashIntro = newEvent;
+            }
+            if ((options.IntroNoPortal || options.IntroCrash2) && data._Vfx_Effect.Reference != null)
+            {
+                changes.Add($"effetto del portale {HandleText(data._Vfx_Effect)} tolto ({(options.IntroNoPortal ? "--intro-senza-portale" : "--intro-crash2")})");
+                data._Vfx_Effect.Reference = null;
+            }
+            float? spawnOffset = options.IntroSpawnOffset ?? (options.IntroCrash2 ? 0f : (float?)null);
+            if (spawnOffset != null && spawnOffset.Value != data._Float_0x4c)
+            {
+                changes.Add($"Spawn offset {FormatFloat(data._Float_0x4c)} -> {FormatFloat(spawnOffset.Value)} " +
+                            $"({(options.IntroSpawnOffset != null ? "--intro-scostamento" : "--intro-crash2")})");
+                data._Float_0x4c = spawnOffset.Value;
+            }
+            if (options.IntroCrash2 && data._Float_0x48 != 0)
+            {
+                changes.Add($"Animation offset {FormatFloat(data._Float_0x48)} -> 0 (--intro-crash2)");
+                data._Float_0x48 = 0;
+            }
+            return changes.Count == 0 ? null : string.Join(", ", changes);
+        }
+
+        /// <summary>
+        /// Animazione di comparsa di Crash 2 per --intro-crash2: tra i testi dei dati delle animazioni di comparsa di Crash
+        /// (Crash_RespawnAnimationManagerData in Crash_CharacterData.igz) quello che nomina Crash 2 ("Crash2", "C2_", "_C2"...);
+        /// se sono piu' d'uno, quello che parla di comparsa (spawn, warp, intro, start). Null se non ce n'e', con il motivo
+        /// </summary>
+        private static (string? eventName, string reason) C2RespawnEvent(ArchiveIndex sw)
+        {
+            var c2 = new System.Text.RegularExpressions.Regex(@"crash_?2|(^|[^a-z0-9])c2([^0-9]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var appear = new System.Text.RegularExpressions.Regex("spawn|warp|intro|start|appear", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            IgArchiveFile? file = (sw.ByArchive.GetValueOrDefault("crash") ?? [])
+                                      .FirstOrDefault(f => NamespaceUtils.GetFileName(f.Path).Equals("Crash_CharacterData.igz", StringComparison.OrdinalIgnoreCase))
+                                  ?? sw.ByPath.Where(e => e.Key.EndsWith("/crash_characterdata.igz")).Select(e => e.Value).FirstOrDefault();
+            if (file == null) return (null, "Crash_CharacterData.igz non trovato nel dump: resta l'animazione dell'intro");
+            Crash_RespawnAnimationManagerData? data = file.ToIgzFile().Objects.OfType<Crash_RespawnAnimationManagerData>().FirstOrDefault();
+            if (data == null) return (null, $"nessun Crash_RespawnAnimationManagerData in {file.Path}: resta l'animazione dell'intro");
+            var texts = new List<string>();
+            foreach (CachedFieldAttr field in data.GetFields(GameVersion.NSX))
+            {
+                if (field.GetValue(data) is string text && !string.IsNullOrWhiteSpace(text) && c2.IsMatch(text) && !texts.Contains(text)) texts.Add(text);
+            }
+            if (texts.Count == 0) return (null, $"nei dati delle animazioni di comparsa di Crash ({file.Path}) nessun testo nomina Crash 2: resta l'animazione dell'intro");
+            List<string> preferred = texts.Where(t => appear.IsMatch(t)).ToList();
+            string chosen = preferred.Count > 0 ? preferred[0] : texts[0];
+            return (chosen, $"animazione di Crash 2 '{chosen}' dai dati di Crash ({file.Path}" +
+                            (texts.Count > 1 ? $"; candidate: {string.Join(", ", texts.Select(t => "'" + t + "'"))}" : "") + ")");
+        }
+
+        /// <summary>
+        /// Campi di un oggetto come testo (nome=valore) per il rapporto: testi, numeri, si'/no, enum e riferimenti
+        /// </summary>
+        private static string FieldsText(igObjectBase obj, GameVersion version)
+        {
+            var parts = new List<string>();
+            foreach (CachedFieldAttr field in obj.GetFields(version))
+            {
+                string name = field.GetName();
+                if (name is "_meta" or "_bitfield" or "_dynamicFieldMemory" || name.StartsWith("__")) continue;
+                object? value;
+                try
+                {
+                    value = field.GetValue(obj);
+                }
+                catch
+                {
+                    continue;
+                }
+                string? text = value switch
+                {
+                    null => null,
+                    string str => $"'{str}'",
+                    igHandleMetaField handle => handle.Reference == null ? null : HandleText(handle),
+                    float number => FormatFloat(number),
+                    bool flag => flag ? "si'" : "no",
+                    Enum choice => choice.ToString(),
+                    int or uint or short or ushort or byte or sbyte or long or ulong => value.ToString(),
+                    _ => null,
+                };
+                if (text != null) parts.Add($"{name.TrimStart('_')}={text}");
+            }
+            return parts.Count == 0 ? "-" : string.Join(", ", parts);
         }
 
         /// <summary>
@@ -6027,13 +6151,21 @@ namespace NST
             detail.AppendLine($"===== LIVELLI ORIGINALI DI CRASH 3 ({withIntro} con l'intro su {checkedFiles} guardati, al massimo {maxLevels})");
             foreach (string line in originalLines) detail.AppendLine(line);
             detail.AppendLine();
+            // Come comincia un livello negli altri giochi (per l'intro di Crash 2): animazioni di comparsa dei personaggi, nomi
+            // di animazioni ed eventi di comparsa nei file di Crash, effetti con portali o comparse, partenza di livelli di Crash 2
+            var startLines = new List<string>();
+            AppendOtherGamesStart(sw, startLines);
+            detail.AppendLine("===== COME COMINCIA UN LIVELLO NEGLI ALTRI GIOCHI (per l'intro di Crash 2)");
+            foreach (string line in startLines) detail.AppendLine(line);
+            detail.AppendLine();
             detail.AppendLine("Ogni script: eventi (EVENTO: messaggio o funzione che lo fa partire), metodi, nodi. Ogni nodo ha un numero");
             detail.AppendLine("(#n), il tipo e i valori che legge: costanti, campi (.nome: dei dati dello script o di un oggetto del gioco),");
             detail.AppendLine("funzioni del gioco (fn), riferimenti (@file::oggetto). Sotto un nodo i suoi rami (nome:), poi il nodo che viene");
             detail.AppendLine("dopo allo stesso livello; un nodo gia' scritto compare come -> #n.");
             detail.AppendLine();
             var scriptLines = new List<string>();
-            foreach (string name in new[] { "common_c3_introsequence", "common_cutscenesequenceplayer_c" })
+            foreach (string name in new[] { "common_c3_introsequence", "common_cutscenesequenceplayer_c", "crash_respawnanimationmanager",
+                                            "common_level_manager_c" })
             {
                 IgArchiveFile? file = FindVscFile(sw, name);
                 if (file == null)
@@ -6048,7 +6180,7 @@ namespace NST
                     IgzFile igz = file.ToIgzFile();
                     var scripts = igz.Objects.OfType<igVscMetaObject>().ToList();
                     if (scripts.Count == 0) detail.AppendLine("  nessuno script (igVscMetaObject) nel file");
-                    var dumper = new VscDumper(detail, igz.GameVersion) { MaxLines = name.Contains("intro") ? 6000 : 3000 };
+                    var dumper = new VscDumper(detail, igz.GameVersion) { MaxLines = name.Contains("intro") || name.Contains("respawn") ? 6000 : 3000 };
                     foreach (igVscMetaObject script in scripts) dumper.Dump(script, file.Path);
                     scriptLines.Add($"  {file.Path}: {scripts.Count} script, {igz.Objects.Count} oggetti");
                 }
@@ -6085,10 +6217,150 @@ namespace NST
             report.AppendLine($"intro e partenze dei livelli originali di Crash 3 ({withIntro} con l'intro; tutte nel file dell'intro):");
             foreach (string line in originalLines.Take(24)) report.AppendLine(line);
             if (originalLines.Count > 24) report.AppendLine($"  ... e altre {originalLines.Count - 24} righe (nel file dell'intro)");
-            report.AppendLine("script dell'intro scritti per esteso:");
+            report.AppendLine("script scritti per esteso (intro di Crash 3, sequenza, animazioni di comparsa di Crash, gestore del livello):");
             foreach (string line in scriptLines) report.AppendLine(line);
+            report.AppendLine($"come comincia un livello negli altri giochi (animazioni di comparsa, nomi, effetti, partenza di livelli di Crash 2): " +
+                              $"{startLines.Count} righe nel file dell'intro");
             report.AppendLine();
             return writeError == null ? detailPath : null;
+        }
+
+        /// <summary>
+        /// Come comincia un livello negli altri giochi, per costruire un'intro come quella di Crash 2: dati delle animazioni di
+        /// comparsa dei personaggi (Crash_RespawnAnimationManagerData), nomi di animazioni o eventi di comparsa nei file di Crash
+        /// (crash.pak), effetti (vfx/) con portali, comparse o teletrasporti, partenza e entita' vicine nei livelli di Crash 2
+        /// </summary>
+        private static void AppendOtherGamesStart(ArchiveIndex sw, List<string> lines)
+        {
+            lines.Add("animazioni di comparsa dei personaggi (Crash_RespawnAnimationManagerData nei dati dei personaggi):");
+            int respawnData = 0;
+            foreach (var (path, file) in sw.ByPath.Where(e => e.Key.EndsWith("_characterdata.igz")).OrderBy(e => e.Key, StringComparer.Ordinal))
+            {
+                try
+                {
+                    foreach (Crash_RespawnAnimationManagerData data in file.ToIgzFile().Objects.OfType<Crash_RespawnAnimationManagerData>())
+                    {
+                        respawnData++;
+                        lines.Add($"  {path}: {FieldsText(data, GameVersion.NSX)}");
+                    }
+                }
+                catch (Exception e)
+                {
+                    lines.Add($"  {path}: non letto ({e.Message})");
+                }
+            }
+            if (respawnData == 0) lines.Add("  nessuno");
+
+            // Nomi nei file di Crash (animazioni, eventi del comportamento) che parlano di comparsa
+            var filter = new System.Text.RegularExpressions.Regex("^Cutscene_|respawn|warp|intro|spawn|magicmoment|teleport|portal|appear",
+                                                                  System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var names = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+            int filesRead = 0;
+            foreach (IgArchiveFile file in sw.ByArchive.GetValueOrDefault("crash") ?? [])
+            {
+                string lower = file.Path.ToLowerInvariant();
+                if (lower.StartsWith("textures/") || lower.StartsWith("loosetextures/") || lower.StartsWith("materialinstances/") ||
+                    lower.StartsWith("models/") || lower.EndsWith(".hkx")) continue;
+                byte[] data;
+                try
+                {
+                    data = file.Uncompress();
+                }
+                catch
+                {
+                    continue;
+                }
+                filesRead++;
+                string fileName = NamespaceUtils.GetFileName(file.Path, false);
+                int start = -1;
+                for (int i = 0; i <= data.Length; i++)
+                {
+                    bool letter = i < data.Length &&
+                                  (data[i] is (>= (byte)'a' and <= (byte)'z') or (>= (byte)'A' and <= (byte)'Z') or (>= (byte)'0' and <= (byte)'9') or
+                                   (byte)'_' or (byte)'-' or (byte)'.');
+                    if (letter)
+                    {
+                        if (start < 0) start = i;
+                        continue;
+                    }
+                    if (start >= 0 && i - start >= 6 && i - start <= 80)
+                    {
+                        string text = Encoding.ASCII.GetString(data, start, i - start);
+                        if (filter.IsMatch(text))
+                        {
+                            if (!names.TryGetValue(text, out SortedSet<string>? seenIn)) names[text] = seenIn = new SortedSet<string>(StringComparer.Ordinal);
+                            if (seenIn.Count < 3) seenIn.Add(fileName);
+                        }
+                    }
+                    start = -1;
+                }
+            }
+            lines.Add($"nomi di animazioni o eventi di comparsa nei file di Crash (crash.pak, {filesRead} file letti, {names.Count} nomi):");
+            foreach (var (text, seenIn) in names.Take(400)) lines.Add($"  {text}  ({string.Join(", ", seenIn)})");
+            if (names.Count > 400) lines.Add($"  ... e altri {names.Count - 400}");
+
+            // Effetti con portali, comparse, teletrasporti
+            var vfxFilter = new System.Text.RegularExpressions.Regex("warp|spawn|teleport|portal|intro|magic|appear",
+                                                                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            List<string> effects = sw.ByPath.Keys.Where(k => k.StartsWith("vfx/") && vfxFilter.IsMatch(NamespaceUtils.GetFileName(k, false)))
+                                             .OrderBy(k => k, StringComparer.Ordinal).ToList();
+            lines.Add($"effetti (vfx/) con portali, comparse o teletrasporti nel nome ({effects.Count}):");
+            foreach (string effect in effects.Take(200)) lines.Add("  " + effect);
+            if (effects.Count > 200) lines.Add($"  ... e altri {effects.Count - 200}");
+
+            // Partenza di alcuni livelli di Crash 2 (e di Crash 1 per confronto): componenti della partenza, entita' vicine
+            // (non le decorazioni) e quelle che nel nome o nei componenti parlano di intro o comparsa
+            var nameFilter = new System.Text.RegularExpressions.Regex("intro|warp|cutscene|spawn|magic|portal|respawn",
+                                                                      System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            foreach (string level in new[] { "maps/crash2/l201_turtlewoods/l201_turtlewoods.igz", "maps/crash2/l202_snowgo/l202_snowgo.igz",
+                                             "maps/crash1/l101_nsanitybeach/l101_nsanitybeach.igz" })
+            {
+                if (!sw.ByPath.TryGetValue(level, out IgArchiveFile? file))
+                {
+                    lines.Add($"partenza di {level}: file non trovato nel dump");
+                    continue;
+                }
+                try
+                {
+                    IgzFile igz = file.ToIgzFile();
+                    CPlayerStartEntity? start = MainPlayerStart(igz, null);
+                    lines.Add($"partenza di {level}: " + (start == null ? "nessuna partenza nel file"
+                                                                       : $"{start.ObjectName} {PlaceText(start)}, componenti: {ComponentsText(start)}"));
+                    int shown = 0;
+                    foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                    {
+                        if (ReferenceEquals(entity, start) || IsStaticDecoration(entity)) continue;
+                        float distance = start == null ? float.MaxValue : EntityDistance(start, entity);
+                        bool named = nameFilter.IsMatch(entity.ObjectName ?? "") || entity.GetComponents().Any(c => nameFilter.IsMatch(c.GetType().Name));
+                        if (distance > 800 && !named) continue;
+                        if (++shown > 60)
+                        {
+                            lines.Add("  ... e altre");
+                            break;
+                        }
+                        lines.Add($"  {EntityText(entity)} {PlaceText(entity)}" + (start != null ? $", distanza {FormatFloat(distance)}" : "") +
+                                  $": {ComponentsText(entity)}");
+                    }
+                }
+                catch (Exception e)
+                {
+                    lines.Add($"partenza di {level}: non letto ({e.GetType().Name}: {e.Message})");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Componenti di un'entita' per il rapporto; per quelli degli script (VSC) anche i valori
+        /// </summary>
+        private static string ComponentsText(igEntity entity)
+        {
+            var parts = new List<string>();
+            foreach (igComponentData component in entity.GetComponents())
+            {
+                string name = component.GetType().Name;
+                parts.Add(component is CVscComponentData ? $"{name} [{FieldsText(component, GameVersion.NSX)}]" : name);
+            }
+            return parts.Count == 0 ? "nessuno" : string.Join(", ", parts);
         }
 
         /// <summary>
