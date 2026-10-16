@@ -62,7 +62,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
-        [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]
+        [--memoria modello|max|<livello>|<MB>[/<MB>]] [--pc-originali <cartella_archives_pc>]
 ```
 
 Un'opzione scritta male (`--solo-usato`), un'opzione senza il suo valore o con un valore non
@@ -154,12 +154,16 @@ Dettagli:
   un livello che nell'editor era di Crash 1 o 2, `--gioco crash3` aggiunge anche l'intro di
   Crash 3 (vedi `--aggiungi-intro`). Le mosse di Crash 3 (doppio salto, scatto, ...) dipendono
   dai boss battuti nel salvataggio.
-- `--memoria modello|max|<livello>` (con `--nuovo`): dimensione delle aree di memoria del livello
-  nella zone info (`_levelPoolSize` e `_globalChunkPoolSize`). Con `modello` (predefinito) sono
-  quelle del livello originale da cui viene la zone info; con `max` quelle del livello originale
-  che ne ha di più; con il nome di un livello originale quelle di quel livello. Nel dump della
-  versione 1.0.0 tutti i livelli hanno gli stessi valori (200 MB e 30 MB), quindi in pratica non
-  cambia nulla.
+- `--memoria modello|max|<livello>|<MB>[/<MB>]` (con `--nuovo`): dimensione delle aree di memoria
+  del livello nella zone info (`_levelPoolSize` e `_globalChunkPoolSize`). Con `modello`
+  (predefinito) sono quelle del livello originale da cui viene la zone info; con `max` quelle del
+  livello originale che ne ha di più; con il nome di un livello originale quelle di quel livello.
+  Nel dump della versione 1.0.0 tutti i livelli hanno gli stessi valori (200 MB e 30 MB), quindi
+  in pratica non cambia nulla. Dalla v56 si possono scrivere i MB (prova): `--memoria 300` (area
+  del livello 300 MB, globale com'è) o `--memoria 300/40` (anche la globale). Serve a capire se
+  un livello pesante (schermo nero, caricamento bloccato) ha finito la memoria; se la Switch non
+  ha tanta memoria libera il gioco potrebbe bloccarsi al caricamento. La zone info dell'editor
+  PC ha circa 910 e 890 MB.
 - `--riflessi auto|si|no` (con `--nuovo`, dalla v41): riflessi planari nella zone info
   (`_planarReflectionsEnabled`). Il ghiaccio che riflette dei livelli di neve di Crash 2 (Snow Go,
   Cold Hard Crash, Bear It...) sulla Switch disegna il riflesso che il gioco calcola solo se la zone
@@ -229,8 +233,9 @@ Dettagli:
   moment" della zone info. Con la zone info di Crash 3 quella intro il gioco non la fa: aspetta
   l'intro di Crash 3 del livello, ed è quella a far comparire Crash. Se le regole di Crash 3 non
   servono, `--gioco crash2` dà l'intro vera di Crash 2. Con `--gioco crash3`:
-  - `--intro-crash2`: l'intro di Crash 3 resta (serve a far comparire Crash) ma con il portale
-    nascosto, con "Spawn offset" a 0 e con l'animazione di comparsa di Crash 2, se il convertitore
+  - `--intro-crash2`: l'intro di Crash 3 resta (serve a far comparire Crash) ma senza l'effetto
+    del portale (dalla v56 di nuovo tolto, come nella v53: vedi sotto le prove con il Level 7),
+    con "Spawn offset" a 0 e con l'animazione di comparsa di Crash 2, se il convertitore
     la riconosce nei dati delle animazioni di comparsa di Crash (`Crash_RespawnAnimationManagerData`
     in `Crash_CharacterData.igz`: il testo che nomina Crash 2, `Cutscene_Crash2_Warp_Enter`);
     altrimenti resta quella dell'intro (`Cutscene_Crash2_Portal_Exit_Victory`, anche quella di
@@ -240,15 +245,18 @@ Dettagli:
     vita persa: il testo che lo script delle animazioni di comparsa usa per Crash 1);
   - `--intro-evento <nome>`: l'animazione con cui compare Crash (evento del comportamento di Crash,
     "BehaviorEventCrashIntro" nell'editor), per provarne un'altra;
-  - `--intro-senza-portale`: il portale non si vede. Dalla v55 l'effetto resta com'è, come nelle
-    intro che funzionano, e l'intro lo crea 30000 unità dietro Crash ("Animation offset" -30000).
-    Le prove con il Level 7: nella v53 l'effetto si toglieva e dopo il caricamento lo schermo
-    restava nero, con il gioco che andava (menu di pausa): probabilmente lo script si fermava
-    all'effetto mancante, prima di rendere visibile Crash e di ridargli la collisione. Nella v54
-    l'effetto si creava piccolissimo e il caricamento si è bloccato (per questo, per l'intro
-    spostata alla partenza o per l'animazione di Crash 1: le tre cose sono cambiate insieme);
-  - `--intro-togli-portale`, `--intro-portale-piccolo` (prove, dalla v54 e v55): l'effetto tolto
-    come nella v53, oppure piccolissimo ("Animation size" 0.01) ai piedi di Crash come nella v54.
+  - `--intro-togli-portale` (dalla v54): l'effetto del portale tolto ("Vfx effect" vuoto). È
+    quello che fanno `--intro-crash1` e `--intro-crash2` nella v53 e dalla v56;
+  - `--intro-senza-portale`: l'effetto resta com'è, come nelle intro che funzionano, ma l'intro lo
+    crea 30000 unità dietro Crash ("Animation offset" -30000), dove non si vede (nella v55 lo
+    facevano anche `--intro-crash1/2`);
+  - `--intro-portale-piccolo` (prova, dalla v55): l'effetto piccolissimo ("Animation size" 0.01)
+    ai piedi di Crash, come nella v54.
+  Le prove con il Level 7 e `--gioco crash3`: con l'effetto tolto (v53) il caricamento finiva e
+  poi lo schermo restava nero, con il gioco che andava (menu di pausa); con l'effetto
+  piccolissimo (v54) o lontano (v55) il caricamento si è bloccato. Lo schermo nero però c'è anche
+  con `--gioco crash1`, senza nessuna intro: è del livello, non dell'intro (vedi "Schermo nero
+  dopo il caricamento"). Per questo dalla v56 `--intro-crash1/2` tolgono di nuovo l'effetto.
   Il rapporto dice cosa è stato cambiato. Il file `<rapporto>_intro.txt` ha anche come comincia
   un livello negli altri giochi: i dati delle animazioni di comparsa dei personaggi, i nomi di
   animazioni ed eventi di comparsa nei file di Crash (`crash.pak`), gli effetti con portali o
@@ -264,7 +272,9 @@ Dettagli:
   "Animation duration", cioè il resto dell'intro.
   Schermo nero o caricamento bloccato: per capire se dipende dall'intro, converti lo stesso
   livello con `--senza-intro` (con `--gioco crash3` Crash dovrebbe comparire lo stesso, vedi
-  sotto) e guarda se il gioco va avanti (musica, menu di pausa con +) e dove sta Crash.
+  sotto) o con `--gioco crash1` (nessuna intro di Crash 3) e guarda se il gioco va avanti
+  (musica, menu di pausa con +) e dove sta Crash. Il Level 7 resta nero anche con `--gioco
+  crash1`: il problema è nel livello (vedi "Schermo nero dopo il caricamento" più sotto).
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
   esce dal portale, presa da Gone Tomorrow). Quando l'intro "magic moment" della zone info di
   Crash 3 era accesa, senza l'intro Crash non compariva e non si poteva muovere; dalla v27 è
@@ -517,10 +527,47 @@ e con i livelli originali più grandi. Se il livello è molto più grande:
 
 nell'editor usa oggetti di meno livelli diversi (meglio dallo stesso gioco o dal livello di
 partenza) e togli quelli che non servono. Le aree di memoria della zone info sono le stesse per
-tutti i livelli originali (200 MB e 30 MB), quindi `--memoria` non aiuta.
+tutti i livelli originali (200 MB e 30 MB); dalla v56 `--memoria 300` le allarga, per provare
+se un livello si blocca perché ha finito la memoria.
 
 I rallentamenti dovuti a troppi oggetti, luci o effetti non si risolvono con la memoria: vanno
 alleggeriti nell'editor.
+
+### Schermo nero dopo il caricamento
+
+Se il livello carica ma lo schermo resta nero, mentre il menu di pausa (+) funziona, il gioco va
+ma non disegna il livello (il Level 7 di Oichi, anche senza l'intro di Crash 3). Le sezioni del
+rapporto che aiutano a capire perché (dalla v56):
+
+- `MEMORIA`: anche le texture, che in un livello fatto con oggetti di tanti livelli sono quasi
+  tutta la memoria: quante sono, quante ne hanno gli archivi dei livelli originali e da quale
+  archivio Switch vengono (il livello di provenienza dei file che le usano);
+- `LUCI, VOLUMI DI COLORE E BOX VISIVI`: quante luci e volumi di colore per file. Un file di luci
+  di un altro livello copiato dall'editor PC può averne più dell'originale Switch, alleggerito
+  (`L320_TombWader_lighting`: 104 entità sul PC, 84 sulla Switch);
+- `PARTENZA E TELECAMERA`: la telecamera con cui comincia il livello, se c'è, i suoi valori e,
+  per una telecamera su una spline, dove sta la spline rispetto alla partenza; poi i box visivi
+  che contengono la partenza, con i valori che cambiano (esposizione, luminosità, nebbia,
+  distanze a cui spariscono le decorazioni...);
+- `VALORI IMPOSSIBILI NEI FILE CONVERTITI`: NaN, infiniti o numeri enormi negli oggetti dei file
+  convertiti, di solito dati letti nel posto sbagliato: uno solo in una luce o nella telecamera
+  basta a far diventare nero lo schermo.
+
+Prove, una alla volta, per capire da dove viene:
+
+1. `--togli-entita "*"`: toglie tutte le entità dei file di altri livelli (restano i file del
+   livello: partenza, telecamera, casse, piattaforme, luci del livello) e, con `--solo-usati`,
+   anche la loro grafica. Se il livello si vede (magari senza pavimento) il problema viene da
+   quello che è preso da altri livelli (memoria, luci, un'entità: si rimettono a metà con
+   `--togli-entita <file>:*` sui singoli file); se resta nero è nei file del livello;
+2. `--memoria 300`: area di memoria del livello più grande (se la Switch non ce l'ha il gioco
+   potrebbe bloccarsi al caricamento: anche questo dice qualcosa);
+3. `--escludi L320_TombWader_lighting --escludi L219_Ruination_lighting`: senza i file di luci
+   presi da altri livelli.
+
+Mentre lo schermo è nero conviene anche ascoltare: se la musica parte e premendo salto o
+giravolta si sentono i suoni di Crash, il livello va e manca solo l'immagine (telecamera,
+grafica, memoria delle texture); se non si sente niente il livello non è partito davvero.
 
 ## Altri comandi
 

@@ -126,13 +126,14 @@ namespace NST
             public bool IntroCrash1;
             // converti: evento di Crash dell'intro di Crash 3 (_BehaviorEventCrashIntro, l'animazione con cui compare) (dalla v53)
             public string? IntroEvent;
-            // converti: l'intro di Crash 3 senza il portale visibile: l'effetto resta, uguale, ma lontanissimo (Animation offset);
-            // nella v53 si toglieva, nella v54 si faceva piccolissimo (dalla v55 le prove sono IntroRemovePortal e IntroTinyPortal)
+            // converti: l'intro di Crash 3 senza il portale visibile: l'effetto resta, uguale, ma lontanissimo (Animation offset,
+            // come --intro-crash1/2 nella v55: con il Level 7 e Crash 3 il caricamento si e' bloccato)
             public bool IntroNoPortal;
             // converti: portale nascosto come nella v54 (Animation size 0.01, ai piedi di Crash), per le prove (dalla v55)
             public bool IntroTinyPortal;
-            // converti: l'intro di Crash 3 senza l'effetto del portale (_Vfx_Effect vuoto, come --intro-senza-portale e
-            // --intro-crash2 nella v53, che con il Level 7 ha lasciato lo schermo nero): per le prove (dalla v54)
+            // converti: l'intro di Crash 3 senza l'effetto del portale (_Vfx_Effect vuoto, dalla v54). Nella v53 e dalla v56 e'
+            // anche quello che fanno --intro-crash1/2: con il Level 7 e' l'unico modo in cui il caricamento e' finito (lo schermo
+            // nero dopo il caricamento c'e' anche con --gioco crash1, senza intro: e' del livello)
             public bool IntroRemovePortal;
             // --nuovo: riflessi planari nella zone info ("auto": accesi se il livello ha i file dei riflessi di un livello con il
             // ghiaccio che riflette, come Snow Go; "si"; "no")
@@ -310,6 +311,8 @@ namespace NST
                 options.Errors.Add("--intro-alla-partenza e --intro-posizione-originale insieme: scegline una");
             if (options.IntroTinyPortal && options.IntroRemovePortal)
                 options.Errors.Add("--intro-portale-piccolo e --intro-togli-portale insieme: scegline una");
+            if (options.IntroNoPortal && (options.IntroTinyPortal || options.IntroRemovePortal))
+                options.Errors.Add($"--intro-senza-portale e {(options.IntroTinyPortal ? "--intro-portale-piccolo" : "--intro-togli-portale")} insieme: scegline una");
             string igzMode = options.IgzMode.ToLowerInvariant();
             if (igzMode != "nessuno" && igzMode != "maps" && igzMode != "tutti")
                 options.Errors.Add($"--igz {options.IgzMode}: valori possibili nessuno, maps, tutti");
@@ -323,7 +326,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -1860,11 +1863,17 @@ namespace NST
             foreach (string error in indexErrors.Take(10)) report.AppendLine("  ERRORE " + error);
             if (indexErrors.Count > 10) report.AppendLine($"  ... e altri {indexErrors.Count - 10} errori");
 
-            // --memoria <livello>: controllato subito, non dopo la conversione
+            // --memoria <livello>: controllato subito, non dopo la conversione (--memoria <MB>[/<MB>] non cerca niente)
             if (!options.Memory.Equals("modello", StringComparison.OrdinalIgnoreCase) && !options.Memory.Equals("max", StringComparison.OrdinalIgnoreCase) &&
-                FindZoneInfo(sw, options.Memory) == null)
+                !TryParseMemoryMb(options.Memory, out _, out _, out _) && FindZoneInfo(sw, options.Memory) == null)
             {
-                Console.WriteLine($"Errore: --memoria {options.Memory}: zone info di quel livello non trovata nel dump (usa modello, max o il nome di un livello originale)");
+                Console.WriteLine($"Errore: --memoria {options.Memory}: zone info di quel livello non trovata nel dump (usa modello, max, il nome di un livello " +
+                                  "originale o i MB, per esempio 300 o 300/40)");
+                return 1;
+            }
+            if (TryParseMemoryMb(options.Memory, out _, out _, out string? memoryError) && memoryError != null)
+            {
+                Console.WriteLine($"Errore: --memoria {options.Memory}: {memoryError}");
                 return 1;
             }
 
@@ -3379,10 +3388,16 @@ namespace NST
                 }
                 sizeReference = zoneTemplate;
 
-                // Memoria del livello (--memoria): dimensioni delle aree di memoria da un'altra zone info originale
+                // Memoria del livello (--memoria): dimensioni delle aree di memoria da un'altra zone info originale, oppure in MB
+                // (--memoria 300, --memoria 300/40: area del livello e area globale)
                 CZoneInfo? poolSource = null;
                 string? poolFrom = null;
-                if (options.Memory.Equals("max", StringComparison.OrdinalIgnoreCase))
+                TryParseMemoryMb(options.Memory, out ulong? customLevelPool, out ulong? customGlobalPool, out _);
+                if (customLevelPool != null)
+                {
+                    // MB scritti: nessuna zone info da cui prenderle
+                }
+                else if (options.Memory.Equals("max", StringComparison.OrdinalIgnoreCase))
                 {
                     (poolSource, poolFrom) = LargestPoolZoneInfo(sw);
                     if (poolSource == null) report.AppendLine("--memoria max: nessuna zone info originale leggibile nel dump");
@@ -3406,7 +3421,7 @@ namespace NST
                 }
 
                 EGameYear? forcedYear = options.Game == null ? null : LevelBuilder.GetGameYear(options.Game);
-                if (zoneTemplate == null && (forcedYear != null || poolSource != null))
+                if (zoneTemplate == null && (forcedYear != null || poolSource != null || customLevelPool != null))
                     report.AppendLine("  ATTENZIONE: con --zoneinfo-da pc --gioco e --memoria non si applicano (cambiano solo la zone info presa da un originale)");
                 // Riflessi planari: il ghiaccio che riflette (Snow Go, Cold Hard Crash...) sulla Switch disegna il riflesso che il
                 // gioco calcola solo se la zone info li accende; spenti (N. Sanity Beach) il ghiaccio resta nero e sembra che
@@ -3427,7 +3442,8 @@ namespace NST
                 {
                     registered = BuildRegistration(levelId, registration, sw, updatePath, report, embedded, rename, renamedNamespaces, zoneTemplate, registerIn,
                                                    options.SaveMode != "originale", levelHasC3Intro, forcedYear, poolSource, poolFrom, !options.WithoutMode,
-                                                   planarReflections, reflectionsReason, crash1Tokens, options.TokensOnlyCrash1, options.TokensNoHud);
+                                                   planarReflections, reflectionsReason, crash1Tokens, options.TokensOnlyCrash1, options.TokensNoHud,
+                                                   customLevelPool != null ? (customLevelPool.Value, customGlobalPool, options.Memory) : ((ulong, ulong?, string)?)null);
                 }
                 catch (Exception registrationError)
                 {
@@ -3596,6 +3612,29 @@ namespace NST
 
             AppendMemoryReport(report, output, sw, sizeReference);
 
+            // Schermo nero: la telecamera della partenza e i valori impossibili (NaN, infiniti, enormi) nei file convertiti
+            try
+            {
+                AppendStartCamera(report, output);
+            }
+            catch (Exception e)
+            {
+                report.AppendLine("=== PARTENZA E TELECAMERA ===");
+                report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                report.AppendLine();
+            }
+            try
+            {
+                Console.WriteLine("Controllo i valori dei file convertiti...");
+                AppendOddValues(report, output);
+            }
+            catch (Exception e)
+            {
+                report.AppendLine("=== VALORI IMPOSSIBILI NEI FILE CONVERTITI ===");
+                report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                report.AppendLine();
+            }
+
             // Scritto prima in un file temporaneo: se qualcosa va storto il vecchio archivio resta com'era
             string? saveError = null;
             try
@@ -3747,7 +3786,7 @@ namespace NST
                                               bool ownSave, bool levelHasC3Intro, EGameYear? forcedYear,
                                               CZoneInfo? poolSource, string? poolFrom, bool editorMode,
                                               bool? planarReflections, string reflectionsReason, bool crash1Tokens, bool tokensOnlyCrash1,
-                                              bool tokensNoHud)
+                                              bool tokensNoHud, (ulong level, ulong? global, string text)? customPool = null)
         {
             string zoneInfoPath = $"maps/{levelId}_zoneinfo.igz";
             report.AppendLine($"REGISTRAZIONE DEL LIVELLO ({Path.GetFileName(updatePath)})");
@@ -3876,6 +3915,20 @@ namespace NST
                                       $"{Mb(poolSource._globalChunkPoolSize?._size ?? 0)}");
                     if (poolSource._levelPoolSize != null) zoneInfo._levelPoolSize._size = poolSource._levelPoolSize._size;
                     if (poolSource._globalChunkPoolSize != null) zoneInfo._globalChunkPoolSize._size = poolSource._globalChunkPoolSize._size;
+                }
+                // --memoria <MB>[/<MB>]: area di memoria del livello (e globale) scritta a mano. Tutti i livelli originali della
+                // Switch hanno 200 MB e 30 MB; quella del PC dell'editor ~910 e ~890 MB. Per la prova di un livello pesante
+                if (customPool != null)
+                {
+                    var (poolLevel, poolGlobal, poolText) = customPool.Value;
+                    zoneInfo._levelPoolSize ??= new igSizeTypeMetaField();
+                    zoneInfo._globalChunkPoolSize ??= new igSizeTypeMetaField();
+                    ulong newGlobal = poolGlobal ?? zoneInfo._globalChunkPoolSize._size;
+                    report.AppendLine($"  memoria del livello scritta con --memoria {poolText}: livello {Mb(zoneInfo._levelPoolSize._size)} -> " +
+                                      $"{Mb(poolLevel)}, globale {Mb(zoneInfo._globalChunkPoolSize._size)} -> {Mb(newGlobal)} (i livelli originali " +
+                                      "della Switch hanno tutti 200 MB e 30 MB: se il gioco non trova tanta memoria potrebbe bloccarsi al caricamento)");
+                    zoneInfo._levelPoolSize._size = poolLevel;
+                    zoneInfo._globalChunkPoolSize._size = newGlobal;
                 }
                 // Modalita' scelta nell'editor (personaggio, veicolo, opzioni speciali): l'editor la mette nella sua zone
                 // info e, quando premi Play, crea i dati del personaggio che la attivano. Si fa lo stesso qui
@@ -4159,19 +4212,20 @@ namespace NST
         // Animation offset a 0 ai piedi di Crash
         private const float TinyPortalSize = 0.01f;
 
-        // Portale nascosto dalla v55 (--intro-crash1/2, --intro-senza-portale): l'effetto resta com'e', come nelle intro che funzionano,
-        // ma l'intro lo crea lontanissimo. "Animation offset" e' la distanza del portale davanti alla partenza di Crash (340 in Gone
-        // Tomorrow, -200 in Bone Yard, dietro): a -30000 sta 30 km dietro Crash. Le prove con il Level 7: nella v53 l'effetto si toglieva
-        // e lo schermo e' rimasto nero (lo script, dopo l'effetto, fa partire i ritardi che fanno comparire Crash e gli ridanno la
-        // collisione: probabilmente si fermava li'), nella v54 piccolissimo (TinyPortalSize) e il caricamento si e' bloccato
+        // Portale lontano (--intro-senza-portale; nella v55 anche --intro-crash1/2): l'effetto resta com'e', come nelle intro che
+        // funzionano, ma l'intro lo crea lontanissimo. "Animation offset" e' la distanza del portale davanti alla partenza di Crash (340
+        // in Gone Tomorrow, -200 in Bone Yard, dietro): a -30000 sta 30 km dietro Crash. Le prove con il Level 7 e Crash 3: effetto tolto
+        // (v53) caricamento finito e schermo nero; piccolissimo (v54) e lontano (v55) caricamento bloccato. Lo schermo nero c'e' anche
+        // con --gioco crash1, senza intro: e' del livello. Per questo dalla v56 --intro-crash1/2 tolgono l'effetto, come nella v53
         private const float HiddenPortalOffset = -30000f;
 
         /// <summary>
         /// Opzioni dell'intro di Crash 3 (aggiunta o gia' nel livello): --intro-evento (animazione con cui compare Crash),
-        /// --intro-senza-portale (portale nascosto: l'effetto resta com'e', lontanissimo), --intro-togli-portale (niente effetto del
-        /// portale, come nella v53), --intro-portale-piccolo (piccolissimo ai piedi di Crash, come nella v54), --intro-scostamento
-        /// (Spawn offset) e --intro-crash1/--intro-crash2 (per fare un'intro come quella di Crash 1 o 2: animazione di comparsa di quel
-        /// gioco se trovata, portale nascosto, Spawn offset a 0). Dice cosa ha cambiato, null se niente
+        /// --intro-togli-portale (niente effetto del portale), --intro-senza-portale (l'effetto resta com'e', lontanissimo, come
+        /// nella v55), --intro-portale-piccolo (piccolissimo ai piedi di Crash, come nella v54), --intro-scostamento (Spawn offset) e
+        /// --intro-crash1/--intro-crash2 (per fare un'intro come quella di Crash 1 o 2: animazione di comparsa di quel gioco se
+        /// trovata, effetto del portale tolto se non c'e' un'altra opzione del portale, Spawn offset a 0). Dice cosa ha cambiato,
+        /// null se niente
         /// </summary>
         private static string? ApplyIntroOptions(common_C3_IntroSequenceData data, Options options, string? gameEvent)
         {
@@ -4184,11 +4238,14 @@ namespace NST
                 changes.Add($"evento '{data._BehaviorEventCrashIntro}' -> '{newEvent}' ({(options.IntroEvent != null ? "--intro-evento" : gameOption)})");
                 data._BehaviorEventCrashIntro = newEvent;
             }
-            if (options.IntroRemovePortal)
+            // --intro-crash1/2 senza un'altra opzione del portale: effetto tolto, come nella v53 (con il Level 7 e Crash 3 l'effetto
+            // piccolissimo della v54 e quello lontano della v55 hanno bloccato il caricamento, senza effetto e' finito)
+            if (options.IntroRemovePortal || (otherGame && !options.IntroNoPortal && !options.IntroTinyPortal))
             {
                 if (data._Vfx_Effect.Reference != null)
                 {
-                    changes.Add($"effetto del portale {HandleText(data._Vfx_Effect)} tolto (--intro-togli-portale)");
+                    changes.Add($"effetto del portale {HandleText(data._Vfx_Effect)} tolto " +
+                                $"({(options.IntroRemovePortal ? "--intro-togli-portale" : gameOption + "; --intro-senza-portale per lasciarlo, lontano")})");
                     data._Vfx_Effect.Reference = null;
                 }
             }
@@ -4206,12 +4263,12 @@ namespace NST
                     data._Float_0x48 = 0;
                 }
             }
-            else if ((options.IntroNoPortal || otherGame) && data._Vfx_Effect.Reference != null && data._Float_0x48 != HiddenPortalOffset)
+            else if (options.IntroNoPortal && data._Vfx_Effect.Reference != null && data._Float_0x48 != HiddenPortalOffset)
             {
-                // l'effetto resta com'e', come nelle intro che funzionano: lo crea lontanissimo dietro Crash
+                // l'effetto resta com'e', come nelle intro che funzionano: lo crea lontanissimo dietro Crash (come la v55)
                 changes.Add($"portale lontano: Animation offset {FormatFloat(data._Float_0x48)} -> {FormatFloat(HiddenPortalOffset)} " +
                             $"(l'effetto {HandleText(data._Vfx_Effect)} resta com'e', {FormatFloat(-HiddenPortalOffset)} unita' dietro Crash: non si vede) " +
-                            $"({(options.IntroNoPortal ? "--intro-senza-portale" : gameOption)})");
+                            "(--intro-senza-portale)");
                 data._Float_0x48 = HiddenPortalOffset;
             }
             float? spawnOffset = options.IntroSpawnOffset ?? (otherGame ? 0f : (float?)null);
@@ -5001,6 +5058,17 @@ namespace NST
             report.AppendLine("(dalla v48 anche nei file del livello stesso, indicando il file).");
             if (start == null) report.AppendLine("  partenza (PlayerStart) non trovata: distanze non calcolate");
             else report.AppendLine($"  partenza (PlayerStart): {FormatFloat(start.Value.x)} {FormatFloat(start.Value.y)} {FormatFloat(start.Value.z)}");
+            // Quante per tipo e per file (solo quelle che il gioco carica): un file di luci di un altro livello preso dal PC puo'
+            // averne molte piu' dell'originale Switch (L320_TombWader_lighting nel Level 7: 104 entita', sulla Switch 84)
+            List<LightVolume> loadedVolumes = volumes.Where(v => v.Loaded).ToList();
+            if (loadedVolumes.Count > 0)
+            {
+                string Counts(IEnumerable<LightVolume> list) =>
+                    string.Join(", ", list.GroupBy(v => v.Kind).OrderBy(g => g.Key).Select(g => $"{g.Count()} {g.Key}"));
+                report.AppendLine($"  in tutto (file nel pacchetto): {Counts(loadedVolumes)}");
+                foreach (var group in loadedVolumes.GroupBy(v => v.File).OrderByDescending(g => g.Count()).Take(12))
+                    report.AppendLine($"    {group.Key}: {Counts(group)}");
+            }
             var rows = new List<(LightVolume volume, double? distance, bool inside)>();
             foreach (LightVolume volume in volumes)
             {
@@ -5435,6 +5503,309 @@ namespace NST
         private static string Mb(ulong bytes) => $"{bytes / (1024.0 * 1024.0):0.#} MB";
 
         /// <summary>
+        /// Rapporto: le partenze (CPlayerStartEntity) dei file del livello e la telecamera con cui comincia ognuna, con i suoi valori;
+        /// per una telecamera su una spline (CSplineCamera) anche la spline: punti, dove stanno, distanza dalla partenza. Se la
+        /// telecamera non si trova, o guarda da un punto lontano o impossibile, lo schermo puo' restare nero con il gioco che va
+        /// </summary>
+        private static void AppendStartCamera(StringBuilder report, IgArchive output)
+        {
+            report.AppendLine("=== PARTENZA E TELECAMERA ===");
+            report.AppendLine("La telecamera con cui comincia il livello (quella della partenza): se manca o ha valori impossibili lo schermo puo'");
+            report.AppendLine("restare nero mentre il gioco va. Posizioni come nei file; per una telecamera su una spline, i punti della spline.");
+            var files = output.Files.Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase)).ToList();
+            var byNamespace = new Dictionary<string, IgArchiveFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (IgArchiveFile f in files) byNamespace.TryAdd(NamespaceUtils.GetFileName(f.Path, false), f);
+            var parsed = new Dictionary<string, IgzFile?>(StringComparer.OrdinalIgnoreCase);
+            IgzFile? Parse(string ns)
+            {
+                if (parsed.TryGetValue(ns, out IgzFile? cached)) return cached;
+                IgzFile? igz = null;
+                if (byNamespace.TryGetValue(ns, out IgArchiveFile? file))
+                {
+                    try
+                    {
+                        igz = file.ToIgzFile();
+                    }
+                    catch
+                    {
+                        // file che non si rilegge: lo dice un'altra sezione
+                    }
+                }
+                parsed[ns] = igz;
+                return igz;
+            }
+            int starts = 0;
+            var startPoints = new List<(string name, float x, float y, float z)>();
+            foreach (IgArchiveFile file in files)
+            {
+                IgzFile? igz = Parse(NamespaceUtils.GetFileName(file.Path, false));
+                if (igz == null) continue;
+                foreach (CPlayerStartEntity start in igz.Objects.OfType<CPlayerStartEntity>())
+                {
+                    starts++;
+                    var (sx, sy, sz) = (start._parentSpacePosition._x, start._parentSpacePosition._y, start._parentSpacePosition._z);
+                    startPoints.Add((start.ObjectName ?? "?", sx, sy, sz));
+                    report.AppendLine($"  partenza {start.ObjectName ?? "?"} ({file.Path}): {PlaceText(start)}, inizio della zona {(start._zoneStart ? "si'" : "no")}");
+                    // la telecamera e' un oggetto di un altro file (il file _Camera del livello: riferimento) o dello stesso file
+                    igObject? camera = start._camera;
+                    NamedReference? cameraRef = camera?.Reference;
+                    IgzFile? cameraIgz = igz;
+                    if (camera == null || (cameraRef != null && cameraRef.IsNullOrEmpty()))
+                    {
+                        report.AppendLine("    telecamera: nessuna (il gioco usa quella predefinita)");
+                        continue;
+                    }
+                    string cameraName = cameraRef != null ? RefText(cameraRef) : camera.ObjectName ?? "?";
+                    if (cameraRef != null)
+                    {
+                        cameraIgz = Parse(cameraRef.namespaceName);
+                        camera = cameraIgz?.FindObject(cameraRef);
+                        if (cameraIgz == null || camera == null)
+                        {
+                            report.AppendLine($"    telecamera {cameraName}: NON TROVATA ({(cameraIgz == null ? "il suo file non e' nell'archivio" : "il file non ha quell'oggetto")})");
+                            continue;
+                        }
+                    }
+                    report.AppendLine($"    telecamera {cameraName} [{camera.GetType().Name}]: {DeepFieldsText(camera, cameraIgz!.GameVersion, 0)}");
+                    if (camera is not CSplineCamera splineCamera) continue;
+                    NamedReference? pathRef = splineCamera._splineEntity?.Reference;
+                    if (pathRef == null || pathRef.IsNullOrEmpty())
+                    {
+                        report.AppendLine("    spline: nessuna");
+                        continue;
+                    }
+                    IgzFile? pathIgz = Parse(pathRef.namespaceName);
+                    if (pathIgz?.FindObject(pathRef) is not igEntity pathEntity)
+                    {
+                        report.AppendLine($"    spline {RefText(pathRef)}: NON TROVATA");
+                        continue;
+                    }
+                    igSpline2? spline = pathEntity.GetComponent<CSplineComponentData>()?._spline;
+                    List<igSplineControlPoint2> points = spline?._data?._data.Where(p => p != null).Cast<igSplineControlPoint2>().ToList()
+                                                         ?? new List<igSplineControlPoint2>();
+                    var (px, py, pz) = (pathEntity._parentSpacePosition._x, pathEntity._parentSpacePosition._y, pathEntity._parentSpacePosition._z);
+                    string pointsText = points.Count == 0 ? "nessun punto" :
+                        $"{points.Count} punti, lunghezza {FormatFloat(spline!._length)}, primo {FormatFloat(px + points[0]._position._x)} {FormatFloat(py + points[0]._position._y)} " +
+                        $"{FormatFloat(pz + points[0]._position._z)}, ultimo {FormatFloat(px + points[^1]._position._x)} {FormatFloat(py + points[^1]._position._y)} " +
+                        $"{FormatFloat(pz + points[^1]._position._z)}, il piu' vicino alla partenza a " +
+                        FormatFloat(points.Min(p => MathF.Sqrt(MathF.Pow(px + p._position._x - sx, 2) + MathF.Pow(py + p._position._y - sy, 2) + MathF.Pow(pz + p._position._z - sz, 2))));
+                    report.AppendLine($"    spline {RefText(pathRef)}: entita' {PlaceText(pathEntity)}, {pointsText} (punti rispetto all'entita', senza la rotazione)");
+                }
+            }
+            if (starts == 0) report.AppendLine("  nessuna partenza nei file del livello");
+
+            // Box visivi (CVisualDataBox) che contengono una partenza: i valori che cambiano rispetto al gioco (quelli con il loro
+            // "State" acceso), come esposizione, luminosita', nebbia e distanze a cui spariscono le decorazioni
+            if (startPoints.Count > 0)
+            {
+                int boxes = 0;
+                foreach (IgArchiveFile file in files)
+                {
+                    IgzFile? igz = Parse(NamespaceUtils.GetFileName(file.Path, false));
+                    if (igz == null) continue;
+                    foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                    {
+                        foreach (CVisualDataBoxComponentData box in entity.GetComponents().OfType<CVisualDataBoxComponentData>())
+                        {
+                            igVec3fMetaField? scale = entity._transform?._nonUniformPersistentParentSpaceScale;
+                            float hx = box._dimensions._x * Math.Abs(scale?._x ?? 1f) / 2;
+                            float hy = box._dimensions._y * Math.Abs(scale?._y ?? 1f) / 2;
+                            float hz = box._dimensions._z * Math.Abs(scale?._z ?? 1f) / 2;
+                            igVec3fMetaField center = entity._parentSpacePosition;
+                            List<string> inside = startPoints
+                                .Where(point => Math.Abs(point.x - center._x) <= hx && Math.Abs(point.y - center._y) <= hy && Math.Abs(point.z - center._z) <= hz)
+                                .Select(point => point.name)
+                                .ToList();
+                            if (inside.Count == 0) continue;
+                            boxes++;
+                            report.AppendLine($"  box visivo {entity.ObjectName ?? "?"} ({file.Path}) contiene la partenza {string.Join(", ", inside)}: " +
+                                              $"acceso {(box._state ? "si'" : "no")}, priorita' {box._priority}, {box._animationType}");
+                            report.AppendLine($"    valori: {(box._data == null ? "nessun dato" : VisualDataText(box._data, igz.GameVersion))}");
+                        }
+                    }
+                }
+                if (boxes == 0) report.AppendLine("  nessun box visivo contiene la partenza: valori del gioco");
+            }
+            report.AppendLine();
+        }
+
+        /// <summary>
+        /// Valori di un gruppo di dati visivi (CVisualDataGroup, il contenuto di un box visivo) che il box cambia: quelli con il loro
+        /// "State" acceso (gli altri restano quelli dei box sotto o del gioco), con quanti sono accesi
+        /// </summary>
+        private static string VisualDataText(CVisualDataGroup data, GameVersion version)
+        {
+            if (data.Reference != null) return "@" + RefText(data.Reference);
+            IReadOnlyList<CachedFieldAttr> fields = data.GetFields(version);
+            var states = new Dictionary<string, bool>();
+            foreach (CachedFieldAttr field in fields)
+            {
+                string name = field.GetName();
+                if (name.EndsWith("State") && field.GetValue(data) is bool state) states[name] = state;
+            }
+            var parts = new List<string>();
+            foreach (CachedFieldAttr field in fields)
+            {
+                string name = field.GetName();
+                if (states.ContainsKey(name) || name.StartsWith("__")) continue;
+                if (states.TryGetValue(name + "State", out bool enabled) && !enabled) continue;
+                string? text = field.GetValue(data) switch
+                {
+                    float number => FormatFloat(number),
+                    bool flag => flag ? "si'" : "no",
+                    igVec2fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)})",
+                    igVec3fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)} {FormatFloat(v._z)})",
+                    igVec4fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)} {FormatFloat(v._z)} {FormatFloat(v._w)})",
+                    igHandleMetaField handle => handle.Reference == null ? null : HandleText(handle),
+                    igObject child => child.Reference != null ? "@" + RefText(child.Reference) : child.GetType().Name,
+                    _ => null,
+                };
+                if (text != null) parts.Add($"{name.TrimStart('_')}={text}");
+            }
+            int activeCount = states.Count(entry => entry.Value);
+            return $"{activeCount} accesi su {states.Count}" + (parts.Count == 0 ? "" : ": " + string.Join(", ", parts));
+        }
+
+        /// <summary>
+        /// Campi di un oggetto come testo, anche vettori e strutture dentro l'oggetto e, fino a depth 1, gli oggetti a cui punta
+        /// (dati della telecamera...)
+        /// </summary>
+        private static string DeepFieldsText(igObjectBase obj, GameVersion version, int depth)
+        {
+            var parts = new List<string>();
+            foreach (CachedFieldAttr field in obj.GetFields(version))
+            {
+                string name = field.GetName();
+                if (name is "_meta" or "_bitfield" or "_dynamicFieldMemory" || name.StartsWith("__")) continue;
+                object? value;
+                try
+                {
+                    value = field.GetValue(obj);
+                }
+                catch
+                {
+                    continue;
+                }
+                string? text = value switch
+                {
+                    null => null,
+                    string str => $"'{str}'",
+                    igHandleMetaField handle => handle.Reference == null ? null : HandleText(handle),
+                    float number => FormatFloat(number),
+                    bool flag => flag ? "si'" : "no",
+                    Enum choice => choice.ToString(),
+                    int or uint or short or ushort or byte or sbyte or long or ulong => value.ToString(),
+                    igVec2fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)})",
+                    igVec3fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)} {FormatFloat(v._z)})",
+                    igVec4fMetaField v => $"({FormatFloat(v._x)} {FormatFloat(v._y)} {FormatFloat(v._z)} {FormatFloat(v._w)})",
+                    igObject child when depth < 1 && child.Reference == null => $"{child.GetType().Name}{{{DeepFieldsText(child, version, depth + 1)}}}",
+                    igObject child => child.Reference != null ? "@" + RefText(child.Reference) : child.GetType().Name,
+                    igObjectBase inner when depth < 2 => $"{{{DeepFieldsText(inner, version, depth + 1)}}}",
+                    _ => null,
+                };
+                if (text != null && text != "{-}") parts.Add($"{name.TrimStart('_')}={text}");
+            }
+            return parts.Count == 0 ? "-" : string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// Rapporto: valori impossibili nei file convertiti (NaN, infiniti, numeri enormi o piccolissimi che vengono da dati letti
+        /// nel posto sbagliato): uno solo, in una luce, in un box visivo o in una telecamera, basta a far diventare nero lo schermo
+        /// </summary>
+        private static void AppendOddValues(StringBuilder report, IgArchive output)
+        {
+            report.AppendLine("=== VALORI IMPOSSIBILI NEI FILE CONVERTITI ===");
+            report.AppendLine("Numeri che non possono essere giusti (NaN, infiniti, oltre 1e9, piccolissimi ma non zero) negli oggetti dei file dei");
+            report.AppendLine("livelli: di solito un dato letto nel posto sbagliato. Uno solo in una luce, in un box visivo o nella telecamera puo'");
+            report.AppendLine("far diventare nero lo schermo.");
+            static string? Odd(float f) =>
+                float.IsNaN(f) ? "NaN" : float.IsInfinity(f) ? "infinito" : Math.Abs(f) > 1e9f ? "enorme" : f != 0 && Math.Abs(f) < 1e-30f ? "piccolissimo" : null;
+            var found = new Dictionary<string, (int count, string example)>();
+            int scannedFiles = 0, unreadable = 0;
+            foreach (IgArchiveFile file in output.Files.Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase)))
+            {
+                IgzFile igz;
+                try
+                {
+                    igz = file.ToIgzFile();
+                }
+                catch
+                {
+                    unreadable++;
+                    continue;
+                }
+                scannedFiles++;
+                string fileName = NamespaceUtils.GetFileName(file.Path);
+                void Scan(igObjectBase obj, string objectText, string path, int depth)
+                {
+                    foreach (CachedFieldAttr field in obj.GetFields(igz.GameVersion))
+                    {
+                        object? value;
+                        try
+                        {
+                            value = field.GetValue(obj);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+                        string name = path + field.GetName();
+                        if (value is float f && Odd(f) is string kind)
+                        {
+                            string key = $"{fileName}: {obj.GetType().Name}.{name}";
+                            var (count, example) = found.GetValueOrDefault(key);
+                            found[key] = (count + 1, example ?? $"{objectText} = {f} ({kind})");
+                        }
+                        else if (value is igObjectBase inner && value is not igObject && depth < 3)
+                        {
+                            Scan(inner, objectText, name + ".", depth + 1);
+                        }
+                    }
+                }
+                foreach (igObject obj in igz.Objects)
+                {
+                    try
+                    {
+                        Scan(obj, obj.ObjectName ?? obj.GetType().Name, "", 0);
+                    }
+                    catch
+                    {
+                        // un oggetto che non si esplora non cambia il resto
+                    }
+                }
+            }
+            report.AppendLine($"  file controllati: {scannedFiles}" + (unreadable > 0 ? $" ({unreadable} non si rileggono)" : ""));
+            if (found.Count == 0) report.AppendLine("  nessuno");
+            foreach (var (key, (count, example)) in found.OrderByDescending(f => f.Value.count).Take(60))
+                report.AppendLine($"  {key}: {count} volte, per esempio {example}");
+            if (found.Count > 60) report.AppendLine($"  ... e altri {found.Count - 60}");
+            report.AppendLine();
+        }
+
+        /// <summary>
+        /// --memoria in MB: "300" (area di memoria del livello) o "300/40" (livello e globale), in byte. False se non sono numeri
+        /// (allora e' modello, max o il nome di un livello); error se i numeri sono fuori misura
+        /// </summary>
+        private static bool TryParseMemoryMb(string text, out ulong? level, out ulong? global, out string? error)
+        {
+            level = null;
+            global = null;
+            error = null;
+            string[] parts = text.Trim().Split('/');
+            if (parts.Length > 2 || parts.Any(p => p.Length == 0 || p.Length > 5 || !p.All(char.IsDigit))) return false;
+            ulong levelMb = ulong.Parse(parts[0]);
+            ulong? globalMb = parts.Length == 2 ? (ulong?)ulong.Parse(parts[1]) : null;
+            if (levelMb < 50 || levelMb > 2000 || (globalMb != null && (globalMb < 10 || globalMb > 2000)))
+            {
+                error = "MB fuori misura (livello tra 50 e 2000, globale tra 10 e 2000; i livelli originali hanno 200/30)";
+                return true;
+            }
+            level = levelMb * 1024UL * 1024UL;
+            global = globalMb * 1024UL * 1024UL;
+            return true;
+        }
+
+        /// <summary>
         /// --gioco: crash1/crash2/crash3 (anche 1, 2, 3 o c3); "" se non valido
         /// </summary>
         private static string NormalizeGame(string value)
@@ -5526,6 +5897,42 @@ namespace NST
                 if (total > originals[0].size)
                     report.AppendLine("ATTENZIONE: il livello e' piu' grande di tutti i livelli originali.");
             }
+
+            // Texture: sono quasi tutta la memoria di un livello che prende oggetti da tanti livelli (ognuno porta le sue texture).
+            // Confronto con le texture degli archivi dei livelli originali e provenienza (archivio Switch che ha il file; uno che
+            // sta in piu' archivi conta nel primo trovato), per capire quali file di altri livelli pesano di piu'
+            static bool IsTexturePath(string path) =>
+                path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("loosetextures/", StringComparison.OrdinalIgnoreCase);
+            long textureTotal = files.Where(f => IsTexturePath(f.Path)).Sum(f => (long)f.UncompressedSize);
+            var originalTextures = sw.ByArchive
+                .Where(a => a.Key.Length > 5 && (a.Key[0] == 'l' || a.Key[0] == 'b') && char.IsDigit(a.Key[1]) && a.Key[4] == '_')
+                .Select(a => (name: a.Key, size: a.Value.Where(f => IsTexturePath(f.Path)).Sum(f => (long)f.UncompressedSize)))
+                .OrderByDescending(a => a.size)
+                .ToList();
+            report.AppendLine($"Texture del livello: {Mb((ulong)textureTotal)}.");
+            if (originalTextures.Count > 0)
+            {
+                string? refKey = reference?.ToLowerInvariant();
+                var refTextures = originalTextures.FirstOrDefault(o => o.name == refKey);
+                if (refKey != null && refTextures.name == refKey)
+                    report.AppendLine($"  texture nell'archivio di {reference}: {Mb((ulong)refTextures.size)}");
+                report.AppendLine("  livelli originali con piu' texture nel loro archivio: " +
+                                  string.Join(", ", originalTextures.Take(5).Select(o => $"{o.name} {Mb((ulong)o.size)}")));
+                if (textureTotal > originalTextures[0].size)
+                    report.AppendLine("  ATTENZIONE: il livello ha piu' texture di tutti i livelli originali: la memoria per le texture potrebbe non bastare " +
+                                      "(schermo nero o caricamento bloccato). Togli decorazioni di altri livelli (--togli-entita, --escludi)");
+            }
+            var textureOrigins = new Dictionary<string, (long size, int count)>();
+            foreach (IgArchiveFile texture in files.Where(file => IsTexturePath(file.Path)))
+            {
+                string origin = sw.ByPath.TryGetValue(texture.Path.ToLowerInvariant(), out IgArchiveFile? original) &&
+                                sw.ArchiveOf.TryGetValue(original, out string? archive) ? archive : "solo nell'archivio PC";
+                var (size, count) = textureOrigins.GetValueOrDefault(origin);
+                textureOrigins[origin] = (size + (long)texture.UncompressedSize, count + 1);
+            }
+            if (textureOrigins.Count > 0)
+                report.AppendLine("  provenienza: " + string.Join(", ", textureOrigins.OrderByDescending(t => t.Value.size).Take(15)
+                                                                  .Select(t => $"{t.Key} {Mb((ulong)t.Value.size)} ({t.Value.count})")));
             report.AppendLine();
         }
 
