@@ -111,20 +111,26 @@ namespace NST
             public bool IntroLikeEditor;
             // converti: "Spawn offset" (_Float_0x4c) dell'intro di Crash 3 del livello, aggiunta o gia' nel livello (dalla v52)
             public float? IntroSpawnOffset;
-            // converti: l'intro di Crash 3 aggiunta dal convertitore resta dov'e' in Gone Tomorrow, come fino alla v51 (dalla v52
-            // si sposta alla partenza del livello)
+            // converti: l'intro di Crash 3 aggiunta dal convertitore resta dov'e' in Gone Tomorrow. Dalla v55 e' il comportamento
+            // normale (resta valida per compatibilita'): vedi IntroMoveToStart
             public bool IntroKeepPosition;
+            // converti: l'intro di Crash 3 aggiunta si sposta alla partenza del livello (v54; nella v52 e v53 il bolt la lasciava
+            // ferma). Con il Level 7 spostata (v54) il caricamento si e' bloccato, e la posizione dell'intro non conta per lo script,
+            // che fa comparire Crash dove sta Crash: dalla v55 solo con --intro-alla-partenza
+            public bool IntroMoveToStart;
             // converti: intro "come in Crash 2" (prova, dalla v53): l'intro di Crash 3, che con la zone info di Crash 3 serve a far
-            // comparire Crash, senza il portale visibile, con Spawn offset e Animation offset a 0 e con l'animazione di comparsa di
-            // Crash 2 presa dai dati di Crash (Crash_RespawnAnimationManager), se si riconosce
+            // comparire Crash, senza il portale visibile, con Spawn offset a 0 e con l'animazione di comparsa di Crash 2 presa dai dati
+            // di Crash (Crash_RespawnAnimationManager), se si riconosce
             public bool IntroCrash2;
             // converti: come IntroCrash2 ma con l'animazione di comparsa di Crash 1 ('SpawnIn') (dalla v54)
             public bool IntroCrash1;
             // converti: evento di Crash dell'intro di Crash 3 (_BehaviorEventCrashIntro, l'animazione con cui compare) (dalla v53)
             public string? IntroEvent;
-            // converti: l'intro di Crash 3 senza il portale visibile: l'effetto resta ma piccolissimo (Animation size); nella v53
-            // l'effetto si toglieva (dalla v54 lo fa IntroRemovePortal)
+            // converti: l'intro di Crash 3 senza il portale visibile: l'effetto resta, uguale, ma lontanissimo (Animation offset);
+            // nella v53 si toglieva, nella v54 si faceva piccolissimo (dalla v55 le prove sono IntroRemovePortal e IntroTinyPortal)
             public bool IntroNoPortal;
+            // converti: portale nascosto come nella v54 (Animation size 0.01, ai piedi di Crash), per le prove (dalla v55)
+            public bool IntroTinyPortal;
             // converti: l'intro di Crash 3 senza l'effetto del portale (_Vfx_Effect vuoto, come --intro-senza-portale e
             // --intro-crash2 nella v53, che con il Level 7 ha lasciato lo schermo nero): per le prove (dalla v54)
             public bool IntroRemovePortal;
@@ -247,6 +253,8 @@ namespace NST
                 else if (name == "--tessere-senza-hud") { options.TokensNoHud = true; rest.RemoveAt(i); }
                 else if (name == "--intro-come-editor") { options.IntroLikeEditor = true; rest.RemoveAt(i); }
                 else if (name == "--intro-posizione-originale") { options.IntroKeepPosition = true; rest.RemoveAt(i); }
+                else if (name == "--intro-alla-partenza") { options.IntroMoveToStart = true; rest.RemoveAt(i); }
+                else if (name == "--intro-portale-piccolo") { options.IntroTinyPortal = true; rest.RemoveAt(i); }
                 else if (name == "--intro-crash2") { options.IntroCrash2 = true; rest.RemoveAt(i); }
                 else if (name == "--intro-crash1") { options.IntroCrash1 = true; rest.RemoveAt(i); }
                 else if (name == "--intro-senza-portale") { options.IntroNoPortal = true; rest.RemoveAt(i); }
@@ -298,6 +306,10 @@ namespace NST
                 options.Errors.Add($"--salvataggio {options.SaveMode}: valori possibili proprio, originale");
             if (options.IntroCrash1 && options.IntroCrash2)
                 options.Errors.Add("--intro-crash1 e --intro-crash2 insieme: scegline una");
+            if (options.IntroMoveToStart && options.IntroKeepPosition)
+                options.Errors.Add("--intro-alla-partenza e --intro-posizione-originale insieme: scegline una");
+            if (options.IntroTinyPortal && options.IntroRemovePortal)
+                options.Errors.Add("--intro-portale-piccolo e --intro-togli-portale insieme: scegline una");
             string igzMode = options.IgzMode.ToLowerInvariant();
             if (igzMode != "nessuno" && igzMode != "maps" && igzMode != "tutti")
                 options.Errors.Add($"--igz {options.IgzMode}: valori possibili nessuno, maps, tutti");
@@ -311,7 +323,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale] [--intro-posizione-originale] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -2769,7 +2781,7 @@ namespace NST
                             try
                             {
                                 var introDetails = new List<string>();
-                                List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, options.IntroLikeEditor, options.IntroKeepPosition,
+                                List<IgArchiveFile> introFiles = AddC3Intro(igz, switchDir, output, options.IntroLikeEditor, options.IntroMoveToStart,
                                                                             data => ApplyIntroOptions(data, options, introGameEvent),
                                                                             out string introInfo, introDetails);
                                 levelHasC3Intro = true;
@@ -3535,8 +3547,8 @@ namespace NST
             // Intro di Crash 3: dove fa comparire Crash rispetto alla partenza, dettagli in <rapporto>_intro.txt
             string? introPath = null;
             bool introDataOptions = options.IntroSpawnOffset != null || options.IntroCrash1 || options.IntroCrash2 || options.IntroEvent != null ||
-                                    options.IntroNoPortal || options.IntroRemovePortal;
-            bool introOptions = options.IntroLikeEditor || options.IntroKeepPosition || introDataOptions;
+                                    options.IntroNoPortal || options.IntroRemovePortal || options.IntroTinyPortal;
+            bool introOptions = options.IntroLikeEditor || options.IntroKeepPosition || options.IntroMoveToStart || introDataOptions;
             if (options.WithoutIntro)
             {
                 if (introOptions)
@@ -3548,12 +3560,12 @@ namespace NST
             }
             else if (levelHasC3Intro || introOptions)
             {
-                if (!introAdded && (options.IntroLikeEditor || options.IntroKeepPosition))
-                    introLines.Add("--intro-come-editor e --intro-posizione-originale valgono solo per l'intro aggiunta dal convertitore: " +
+                if (!introAdded && (options.IntroLikeEditor || options.IntroKeepPosition || options.IntroMoveToStart))
+                    introLines.Add("--intro-come-editor, --intro-alla-partenza e --intro-posizione-originale valgono solo per l'intro aggiunta dal convertitore: " +
                                    (levelHasC3Intro ? "il livello ce l'aveva gia', resta com'e'" : "qui non e' stata aggiunta (serve --gioco crash3 o --aggiungi-intro)"));
                 if (introDataOptions && !levelHasC3Intro)
-                    introLines.Add("--intro-crash1, --intro-crash2, --intro-scostamento, --intro-evento, --intro-senza-portale e --intro-togli-portale " +
-                                   "ignorate: il livello non ha l'intro di Crash 3 (con la zone info di Crash 1 o 2 il gioco usa la sua intro)");
+                    introLines.Add("--intro-crash1, --intro-crash2, --intro-scostamento, --intro-evento, --intro-senza-portale, --intro-togli-portale e " +
+                                   "--intro-portale-piccolo ignorate: il livello non ha l'intro di Crash 3 (con la zone info di Crash 1 o 2 il gioco usa la sua intro)");
                 try
                 {
                     Console.WriteLine("Controllo l'intro di Crash 3...");
@@ -3991,14 +4003,15 @@ namespace NST
         /// L321_GoneTomorrow, dal dump Switch). Impostazioni: come l'editor per un livello nuovo di Crash 3 (LevelBuilder),
         /// oppure, con likeEditor, come l'editor quando passi a Crash 3 un livello che c'e' gia' (GameplayModeManager.
         /// AddC3IntroCutscene: valori di Gone Tomorrow, Animation delay 0.5); adjust applica le opzioni dell'intro (--intro-crash1/2,
-        /// --intro-scostamento, --intro-evento, --intro-senza-portale, --intro-togli-portale) e dice cosa ha cambiato. Le entita'
-        /// copiate (l'intro e quelle del file di Gone Tomorrow a cui rimanda) passano dalla partenza di Gone Tomorrow a quella del
-        /// livello, nella stessa posizione rispetto alla partenza (con keepPosition restano dove sono in Gone Tomorrow, come fino
-        /// alla v51: in un altro livello sono in un punto qualsiasi). Una partenza o un mondo di Gone Tomorrow copiati perche'
-        /// l'intro li nomina si tolgono e l'intro usa quelli del livello. Restituisce i file di Gone Tomorrow che servono
-        /// all'intro (script, comportamenti, ...); in details le righe per il rapporto
+        /// --intro-scostamento, --intro-evento, --intro-senza-portale, --intro-togli-portale, --intro-portale-piccolo) e dice cosa ha
+        /// cambiato. Le entita' copiate (l'intro e quelle del file di Gone Tomorrow a cui rimanda) restano dove sono in Gone Tomorrow,
+        /// come fa l'editor: lo script fa comparire Crash dove sta Crash, la posizione dell'intro non conta. Con moveToStart
+        /// (--intro-alla-partenza, come la v54) passano dalla partenza di Gone Tomorrow a quella del livello, nella stessa posizione
+        /// rispetto alla partenza. Una partenza o un mondo di Gone Tomorrow copiati perche' l'intro li nomina si tolgono e l'intro usa
+        /// quelli del livello. Restituisce i file di Gone Tomorrow che servono all'intro (script, comportamenti, ...); in details le
+        /// righe per il rapporto
         /// </summary>
-        private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, bool likeEditor, bool keepPosition,
+        private static List<IgArchiveFile> AddC3Intro(IgzFile destIgz, string switchDir, IgArchive output, bool likeEditor, bool moveToStart,
                                                       Func<common_C3_IntroSequenceData, string?>? adjust, out string info, List<string> details)
         {
             string pakPath = PakFiles(switchDir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals("l321_gonetomorrow", StringComparison.OrdinalIgnoreCase))
@@ -4086,10 +4099,14 @@ namespace NST
             }
             added.RemoveAll(e => removed.Contains(e));
 
-            // Entita' copiate: dalla partenza di Gone Tomorrow a quella del livello
-            if (keepPosition)
+            // Entita' copiate: restano dove sono in Gone Tomorrow (come fa l'editor e come nelle v51-v53, in cui il bolt fermava lo
+            // spostamento); con --intro-alla-partenza dalla partenza di Gone Tomorrow a quella del livello (v54: con il Level 7 il
+            // caricamento si e' bloccato)
+            if (!moveToStart)
             {
-                details.Add("posizione: come in Gone Tomorrow (--intro-posizione-originale)");
+                details.Add("posizione: come in Gone Tomorrow (lo script fa comparire Crash dove sta Crash; --intro-alla-partenza per spostarla " +
+                            "vicino alla partenza come nella v54)" +
+                            (destStart != null ? $"; partenza del livello {destStart.ObjectName} {PlaceText(destStart)}" : ""));
                 foreach (igEntity entity in added) details.Add($"  {EntityText(entity)}: {PlaceText(entity)}");
             }
             else if (sourceStart == null || destStart == null)
@@ -4137,17 +4154,24 @@ namespace NST
             return dependencies;
         }
 
-        // Dimensione del portale nascosto (--intro-crash1/2, --intro-senza-portale): l'effetto resta, lo script dell'intro fa tutti i
-        // suoi passi come con il portale, ma "Animation size" (la scala con cui l'intro crea l'effetto; Makin' Waves usa 0.35 per un
-        // portale piu' piccolo) lo fa grande l'1%: con Animation offset a 0 sta ai piedi di Crash e non si vede
-        private const float HiddenPortalSize = 0.01f;
+        // Portale piccolissimo (--intro-portale-piccolo; nella v54 il portale nascosto di --intro-crash1/2 e --intro-senza-portale):
+        // "Animation size" (la scala con cui l'intro crea l'effetto; Makin' Waves usa 0.35 per un portale piu' piccolo) all'1%, con
+        // Animation offset a 0 ai piedi di Crash
+        private const float TinyPortalSize = 0.01f;
+
+        // Portale nascosto dalla v55 (--intro-crash1/2, --intro-senza-portale): l'effetto resta com'e', come nelle intro che funzionano,
+        // ma l'intro lo crea lontanissimo. "Animation offset" e' la distanza del portale davanti alla partenza di Crash (340 in Gone
+        // Tomorrow, -200 in Bone Yard, dietro): a -30000 sta 30 km dietro Crash. Le prove con il Level 7: nella v53 l'effetto si toglieva
+        // e lo schermo e' rimasto nero (lo script, dopo l'effetto, fa partire i ritardi che fanno comparire Crash e gli ridanno la
+        // collisione: probabilmente si fermava li'), nella v54 piccolissimo (TinyPortalSize) e il caricamento si e' bloccato
+        private const float HiddenPortalOffset = -30000f;
 
         /// <summary>
         /// Opzioni dell'intro di Crash 3 (aggiunta o gia' nel livello): --intro-evento (animazione con cui compare Crash),
-        /// --intro-senza-portale (portale nascosto: l'effetto resta, piccolissimo), --intro-togli-portale (niente effetto del portale,
-        /// come nella v53), --intro-scostamento (Spawn offset) e --intro-crash1/--intro-crash2 (per fare un'intro come quella di
-        /// Crash 1 o 2: animazione di comparsa di quel gioco se trovata, portale nascosto, Spawn offset e Animation offset a 0).
-        /// Dice cosa ha cambiato, null se niente
+        /// --intro-senza-portale (portale nascosto: l'effetto resta com'e', lontanissimo), --intro-togli-portale (niente effetto del
+        /// portale, come nella v53), --intro-portale-piccolo (piccolissimo ai piedi di Crash, come nella v54), --intro-scostamento
+        /// (Spawn offset) e --intro-crash1/--intro-crash2 (per fare un'intro come quella di Crash 1 o 2: animazione di comparsa di quel
+        /// gioco se trovata, portale nascosto, Spawn offset a 0). Dice cosa ha cambiato, null se niente
         /// </summary>
         private static string? ApplyIntroOptions(common_C3_IntroSequenceData data, Options options, string? gameEvent)
         {
@@ -4168,12 +4192,27 @@ namespace NST
                     data._Vfx_Effect.Reference = null;
                 }
             }
-            else if ((options.IntroNoPortal || otherGame) && data._Vfx_Effect.Reference != null && data._Float_0x78 > HiddenPortalSize)
+            else if (options.IntroTinyPortal)
             {
-                // nella v53 l'effetto si toglieva e con il Level 7 lo schermo restava nero: lo script crea l'effetto e poi lo usa
-                changes.Add($"portale nascosto: Animation size {FormatFloat(data._Float_0x78)} -> {FormatFloat(HiddenPortalSize)} " +
-                            $"(l'effetto {HandleText(data._Vfx_Effect)} resta, piccolissimo) ({(options.IntroNoPortal ? "--intro-senza-portale" : gameOption)})");
-                data._Float_0x78 = HiddenPortalSize;
+                // come la v54: piccolissimo ai piedi di Crash (con il Level 7 il caricamento si e' bloccato)
+                if (data._Vfx_Effect.Reference != null && data._Float_0x78 > TinyPortalSize)
+                {
+                    changes.Add($"portale piccolissimo: Animation size {FormatFloat(data._Float_0x78)} -> {FormatFloat(TinyPortalSize)} (--intro-portale-piccolo)");
+                    data._Float_0x78 = TinyPortalSize;
+                }
+                if (data._Vfx_Effect.Reference != null && data._Float_0x48 != 0)
+                {
+                    changes.Add($"Animation offset {FormatFloat(data._Float_0x48)} -> 0 (--intro-portale-piccolo: ai piedi di Crash)");
+                    data._Float_0x48 = 0;
+                }
+            }
+            else if ((options.IntroNoPortal || otherGame) && data._Vfx_Effect.Reference != null && data._Float_0x48 != HiddenPortalOffset)
+            {
+                // l'effetto resta com'e', come nelle intro che funzionano: lo crea lontanissimo dietro Crash
+                changes.Add($"portale lontano: Animation offset {FormatFloat(data._Float_0x48)} -> {FormatFloat(HiddenPortalOffset)} " +
+                            $"(l'effetto {HandleText(data._Vfx_Effect)} resta com'e', {FormatFloat(-HiddenPortalOffset)} unita' dietro Crash: non si vede) " +
+                            $"({(options.IntroNoPortal ? "--intro-senza-portale" : gameOption)})");
+                data._Float_0x48 = HiddenPortalOffset;
             }
             float? spawnOffset = options.IntroSpawnOffset ?? (otherGame ? 0f : (float?)null);
             if (spawnOffset != null && spawnOffset.Value != data._Float_0x4c)
@@ -4181,11 +4220,6 @@ namespace NST
                 changes.Add($"Spawn offset {FormatFloat(data._Float_0x4c)} -> {FormatFloat(spawnOffset.Value)} " +
                             $"({(options.IntroSpawnOffset != null ? "--intro-scostamento" : gameOption)})");
                 data._Float_0x4c = spawnOffset.Value;
-            }
-            if (otherGame && data._Float_0x48 != 0)
-            {
-                changes.Add($"Animation offset {FormatFloat(data._Float_0x48)} -> 0 ({gameOption})");
-                data._Float_0x48 = 0;
             }
             return changes.Count == 0 ? null : string.Join(", ", changes);
         }

@@ -57,8 +57,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--originale-switch <testo>]... [--tessere-solo-crash1] [--tessere-senza-hud]
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>]
-        [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale]
-        [--intro-posizione-originale]
+        [--intro-evento <nome>] [--intro-senza-portale]
+        [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza]
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
@@ -199,46 +199,56 @@ Dettagli:
   fuori dal pacchetto no (fino alla v36 bastava una copia di un livello di Crash 3 presa per un
   solo oggetto per non aggiungerla). Nella zone info di un livello di Crash 3 l'intro "magic
   moment" del livello originale viene sempre spenta: accesa, Crash non compare.
-  Dalla v52 l'intro aggiunta (e le entità di Gone Tomorrow a cui rimanda, copiate con lei) si sposta
-  dalla partenza di Gone Tomorrow alla partenza del livello (`PlayerStart`), nella stessa posizione
-  e rotazione rispetto alla partenza: fino alla v51 restava nel punto in cui sta in Gone Tomorrow,
-  che in un altro livello è un punto qualsiasi. Una partenza o un mondo di Gone Tomorrow copiati
-  perché l'intro li nomina si tolgono e l'intro usa quelli del livello. Fino alla v53 un'entità
-  copiata "attaccata" a un'altra (bolt, come l'intro di Gone Tomorrow) restava dov'era: nel Level 7
-  l'intro è rimasta a 4457 unità dalla partenza. Dalla v54 resta ferma solo se l'entità a cui è
-  attaccata c'è nel file del livello; il rapporto dice com'è attaccata. Opzioni per provare, se
-  Crash compare ancora spostato rispetto alla partenza:
+  Fino alla v53 l'intro aggiunta restava nel punto in cui sta in Gone Tomorrow, come quando la
+  aggiunge l'editor: dalla v52 doveva spostarsi alla partenza del livello, ma l'intro di Gone
+  Tomorrow è "attaccata" (bolt senza entità, come tutte quelle originali) e questo la fermava. La
+  v54 la spostava davvero (nel Level 7 a 70 unità dalla partenza invece che a 4457) e con il
+  Level 7 il caricamento si è bloccato. Lo script dell'intro però fa comparire Crash dove sta
+  Crash, non dove sta l'intro (vedi sotto): dalla v55 l'intro resta dov'è e si sposta solo con
+  `--intro-alla-partenza`. Una partenza o un mondo di Gone Tomorrow copiati perché l'intro li
+  nomina si tolgono e l'intro usa quelli del livello. Opzioni per provare, se Crash compare
+  spostato rispetto alla partenza:
   - `--intro-scostamento <numero>`: lo "Spawn offset" dell'intro (nell'editor, sotto "Crash spawn
-    delay"), per l'intro aggiunta e per quella che il livello ha già; per un livello nuovo
-    l'editor usa 300 (prova per esempio `--intro-scostamento 0`);
+    delay"), cioè quante unità più avanti l'intro mette Crash; per l'intro aggiunta e per quella
+    che il livello ha già. Per un livello nuovo l'editor usa 300: `--intro-scostamento 0` lo
+    lascia dove comincia;
   - `--intro-come-editor`: l'intro aggiunta come la aggiunge l'editor quando passi a Crash 3 un
     livello che c'è già (valori di Gone Tomorrow, "Animation delay" 0.5) invece che come in un
     livello nuovo di Crash 3 (evento `Cutscene_Crash2_Portal_Exit_Victory`, 1, 1, 2.45, 300);
-  - `--intro-posizione-originale`: l'intro aggiunta resta dove sta in Gone Tomorrow, come fino
-    alla v51 (per confronto).
-  Intro come in Crash 2 (prova, dalla v53): nei livelli di Crash 1 e 2 l'intro (Crash che si
+  - `--intro-alla-partenza` (prova, dalla v55): l'intro aggiunta si sposta vicino alla partenza
+    del livello, nella posizione e rotazione rispetto alla partenza che ha in Gone Tomorrow, come
+    nella v54. `--intro-posizione-originale` (la lascia dov'è) resta valida ma dalla v55 è già così.
+  Cosa fa l'intro (script `common_C3_IntroSequence`, per intero nel file dell'intro dalla v54):
+  all'avvio nasconde Crash e prende la sua posizione e la sua direzione; dopo "Animation delay"
+  gli toglie la collisione, lo mette "Spawn offset" unità più avanti e crea il portale ("Vfx
+  effect") "Animation offset" unità più avanti, grande "Animation size"; dopo "Crash spawn delay"
+  fa partire l'animazione di Crash (evento "BehaviorEventCrashIntro"), lo rende visibile e alla
+  fine dell'animazione gli ridà la collisione; dopo "Animation duration" toglie il portale.
+  Intro come in Crash 1 o 2 (prova, dalla v53): nei livelli di Crash 1 e 2 l'intro (Crash che si
   materializza alla partenza) non è un oggetto del livello: la fa il gioco, con l'intro "magic
   moment" della zone info. Con la zone info di Crash 3 quella intro il gioco non la fa: aspetta
   l'intro di Crash 3 del livello, ed è quella a far comparire Crash. Se le regole di Crash 3 non
   servono, `--gioco crash2` dà l'intro vera di Crash 2. Con `--gioco crash3`:
   - `--intro-crash2`: l'intro di Crash 3 resta (serve a far comparire Crash) ma con il portale
-    nascosto, con "Spawn offset" e "Animation offset" a 0 e con l'animazione di comparsa di
-    Crash 2, se il convertitore la riconosce nei dati delle animazioni di comparsa di Crash
-    (`Crash_RespawnAnimationManagerData` in `Crash_CharacterData.igz`: il testo che nomina Crash 2,
-    `Cutscene_Crash2_Warp_Enter`); altrimenti resta quella dell'intro
-    (`Cutscene_Crash2_Portal_Exit_Victory`, anche quella di Crash 2). Vale anche per l'intro che il
-    livello ha già;
+    nascosto, con "Spawn offset" a 0 e con l'animazione di comparsa di Crash 2, se il convertitore
+    la riconosce nei dati delle animazioni di comparsa di Crash (`Crash_RespawnAnimationManagerData`
+    in `Crash_CharacterData.igz`: il testo che nomina Crash 2, `Cutscene_Crash2_Warp_Enter`);
+    altrimenti resta quella dell'intro (`Cutscene_Crash2_Portal_Exit_Victory`, anche quella di
+    Crash 2). Vale anche per l'intro che il livello ha già;
   - `--intro-crash1` (dalla v54): come `--intro-crash2`, con l'animazione di comparsa di Crash 1
     (`SpawnIn`, quella con cui Crash si materializza all'inizio dei livelli di Crash 1 e dopo una
     vita persa: il testo che lo script delle animazioni di comparsa usa per Crash 1);
   - `--intro-evento <nome>`: l'animazione con cui compare Crash (evento del comportamento di Crash,
     "BehaviorEventCrashIntro" nell'editor), per provarne un'altra;
-  - `--intro-senza-portale`: il portale non si vede. Dalla v54 l'effetto resta e l'intro lo crea
-    piccolissimo ("Animation size" 0.01 invece di 1): nella v53 l'effetto si toglieva (anche con
-    `--intro-crash2`) e con il Level 7 dopo il caricamento lo schermo è rimasto nero, forse perché
-    lo script dell'intro crea l'effetto e poi lo usa;
-  - `--intro-togli-portale` (prova, dalla v54): toglie l'effetto del portale come nella v53, per
-    capire se è quello a lasciare lo schermo nero.
+  - `--intro-senza-portale`: il portale non si vede. Dalla v55 l'effetto resta com'è, come nelle
+    intro che funzionano, e l'intro lo crea 30000 unità dietro Crash ("Animation offset" -30000).
+    Le prove con il Level 7: nella v53 l'effetto si toglieva e dopo il caricamento lo schermo
+    restava nero, con il gioco che andava (menu di pausa): probabilmente lo script si fermava
+    all'effetto mancante, prima di rendere visibile Crash e di ridargli la collisione. Nella v54
+    l'effetto si creava piccolissimo e il caricamento si è bloccato (per questo, per l'intro
+    spostata alla partenza o per l'animazione di Crash 1: le tre cose sono cambiate insieme);
+  - `--intro-togli-portale`, `--intro-portale-piccolo` (prove, dalla v54 e v55): l'effetto tolto
+    come nella v53, oppure piccolissimo ("Animation size" 0.01) ai piedi di Crash come nella v54.
   Il rapporto dice cosa è stato cambiato. Il file `<rapporto>_intro.txt` ha anche come comincia
   un livello negli altri giochi: i dati delle animazioni di comparsa dei personaggi, i nomi di
   animazioni ed eventi di comparsa nei file di Crash (`crash.pak`), gli effetti con portali o
@@ -252,12 +262,14 @@ Dettagli:
   anche i metodi che i nodi chiamano per nome (alla fine di un ritardo, a ogni fotogramma...), che
   prima mancavano: nell'intro sono quelli che partono dopo "Animation delay", "Crash spawn delay" e
   "Animation duration", cioè il resto dell'intro.
-  Schermo nero dopo il caricamento: per capire se dipende dall'intro, converti lo stesso livello
-  senza opzioni dell'intro (portale di Crash 3), con `--intro-crash2` e con `--gioco crash2`
-  (nessuna intro di Crash 3) e guarda anche se il gioco va avanti (musica, menu di pausa con +).
+  Schermo nero o caricamento bloccato: per capire se dipende dall'intro, converti lo stesso
+  livello con `--senza-intro` (con `--gioco crash3` Crash dovrebbe comparire lo stesso, vedi
+  sotto) e guarda se il gioco va avanti (musica, menu di pausa con +) e dove sta Crash.
 - `--senza-intro` (prova): toglie l'intro che l'editor mette nei livelli di Crash 3 (Crash che
-  esce dal portale, presa da Gone Tomorrow). È l'intro a far comparire Crash: se sulla Switch
-  non parte, Crash non compare e non si può muovere.
+  esce dal portale, presa da Gone Tomorrow). Quando l'intro "magic moment" della zone info di
+  Crash 3 era accesa, senza l'intro Crash non compariva e non si poteva muovere; dalla v27 è
+  sempre spenta e Crash dovrebbe comparire anche senza (nella v25, spenta, con un livello con
+  l'intro Crash compariva): è la prova per capire se un problema all'avvio viene dall'intro.
 - File di altri livelli: quando usi un oggetto di un altro livello l'editor copia nell'archivio
   l'intero file da cui viene (per esempio `maps/Crash3/L318_TellNoTales/L318_TellNoTales.igz`).
   Il convertitore mette nel pacchetto del livello (l'elenco dei file che il gioco carica come
