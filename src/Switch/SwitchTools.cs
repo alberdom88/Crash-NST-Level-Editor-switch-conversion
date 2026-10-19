@@ -86,8 +86,11 @@ namespace NST
             // --nuovo senza --gioco: Game e' il gioco impostato nell'editor (Crash Mode), diverso dalla cartella del livello
             public bool GameFromEditor;
             // --nuovo: memoria del livello nella zone info: "modello" (quella del livello originale da cui viene la
-            // zone info), "max" (la piu' grande tra i livelli originali) o il nome di un livello originale
+            // zone info), "max" (la piu' grande tra i livelli originali), il nome di un livello originale o i MB (dalla v56)
             public string Memory = "modello";
+            // converti: MB di texture degli archivi dei livelli originali, che nessun file usa, aggiunte al pacchetto (prova, dalla
+            // v57): con le stesse entita' il livello carica piu' texture, per capire se lo schermo nero viene dalla memoria
+            public int? TestTexturesMb;
             // converti: entita' da togliere dai file di altri livelli copiati dall'editor, "[file:]testo" (testo nel
             // nome, nel tipo, nei componenti o nei file che usa; * = tutte), per trovare quelle che bloccano il gioco
             public List<string> RemoveEntities = [];
@@ -154,7 +157,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento", "--intro-evento",
+            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento", "--intro-evento", "--prova-texture",
         ];
 
         public static int Run(string[] args)
@@ -290,6 +293,12 @@ namespace NST
                 }
                 else if (name == "--gioco" && hasValue) { options.Game = NormalizeGame(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--memoria" && hasValue) { options.Memory = rest[i + 1]; rest.RemoveRange(i, 2); }
+                else if (name == "--prova-texture" && hasValue)
+                {
+                    if (int.TryParse(rest[i + 1], out int megabytes) && megabytes >= 1 && megabytes <= 1000) options.TestTexturesMb = megabytes;
+                    else options.Errors.Add($"--prova-texture {rest[i + 1]}: servono i MB, da 1 a 1000 (per esempio 50)");
+                    rest.RemoveRange(i, 2);
+                }
                 else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--originale-switch" && hasValue) { options.SwitchOriginals.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else i++;
@@ -326,7 +335,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>] [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -3289,6 +3298,44 @@ namespace NST
                 }
             }
 
+            // --prova-texture <MB> (prova): texture degli archivi di livelli originali, che nessun file del livello usa e che non
+            // stanno negli archivi comuni, aggiunte al pacchetto: il gioco le carica con il livello. Con un livello che si vede (per
+            // esempio con --togli-entita "*") dice se lo schermo nero viene dalla memoria: stesse entita', piu' texture caricate.
+            // Prese da tutti i livelli in un ordine misto (hash del percorso), non solo le piu' grandi: numero e misure simili a
+            // quelle delle texture vere di un livello (conta anche quante sono, non solo quanto pesano)
+            if (options.TestTexturesMb != null)
+            {
+                bool IsLevelArchive(string name) => name.Length > 5 && (name[0] == 'l' || name[0] == 'b') && char.IsDigit(name[1]) && name[4] == '_';
+                var inCommonArchives = new HashSet<string>(sw.ByArchive.Where(a => !IsLevelArchive(a.Key))
+                                                             .SelectMany(a => a.Value).Select(f => f.Path.ToLowerInvariant()));
+                var usedNames = new HashSet<string>(output.Files.Select(f => NamespaceUtils.GetFileName(f.Path, false).ToLowerInvariant()));
+                long wanted = options.TestTexturesMb.Value * 1024L * 1024L, added = 0;
+                int count = 0;
+                var sources = new SortedSet<string>(StringComparer.Ordinal);
+                var candidates = sw.ByArchive
+                    .Where(a => IsLevelArchive(a.Key))
+                    .SelectMany(a => a.Value.Where(f => f.IsIGZ() && f.UncompressedSize > 0 && f.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase))
+                                            .Select(f => (archive: a.Key, file: f)))
+                    .OrderBy(c => NamespaceUtils.ComputeHash(c.file.Path))
+                    .ThenBy(c => c.file.Path, StringComparer.Ordinal);
+                foreach (var (archive, texture) in candidates)
+                {
+                    if (added >= wanted) break;
+                    string key = texture.Path.ToLowerInvariant();
+                    if (included.Contains(key) || inCommonArchives.Contains(key) || !usedNames.Add(NamespaceUtils.GetFileName(key, false))) continue;
+                    AddOriginal(texture, "texture aggiunte per la prova della memoria (--prova-texture)");
+                    added += texture.UncompressedSize;
+                    count++;
+                    sources.Add(archive);
+                }
+                report.AppendLine($"=== PROVA DELLA MEMORIA (--prova-texture {options.TestTexturesMb}) ===");
+                report.AppendLine($"Aggiunte al pacchetto {count} texture ({Mb((ulong)added)}) di {sources.Count} livelli originali che nessun file del livello usa:");
+                report.AppendLine("il gioco le carica con il livello. Le entita' sono le stesse: se con queste lo schermo diventa nero (o il caricamento si");
+                report.AppendLine("blocca) il problema e' la memoria delle texture, non un'entita'.");
+                report.AppendLine($"  livelli: {string.Join(", ", sources)}");
+                report.AppendLine();
+            }
+
             // Il pacchetto elenca i file del livello, come quello del PC: i file di altri livelli (maps/...) che l'editor
             // copia per gli oggetti presi da li' ci sono solo se li elenca il pacchetto del PC (il gioco li carica interi,
             // con tutte le loro entita'); gli altri restano nell'archivio, fuori dal pacchetto
@@ -3611,6 +3658,19 @@ namespace NST
             AppendMissingObjects(report, output, fromSwitch, sw);
 
             AppendMemoryReport(report, output, sw, sizeReference);
+
+            // Quante texture si porta dietro ogni file in maps/ (per alleggerire la memoria togliendo le entita' giuste)
+            try
+            {
+                Console.WriteLine("Conto le texture di ogni file...");
+                AppendTextureUsers(report, output);
+            }
+            catch (Exception e)
+            {
+                report.AppendLine("=== TEXTURE PER FILE ===");
+                report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                report.AppendLine();
+            }
 
             // Schermo nero: la telecamera della partenza e i valori impossibili (NaN, infiniti, enormi) nei file convertiti
             try
@@ -5503,6 +5563,92 @@ namespace NST
         private static string Mb(ulong bytes) => $"{bytes / (1024.0 * 1024.0):0.#} MB";
 
         /// <summary>
+        /// Rapporto: le texture che si porta dietro ogni file in maps/ (modelli, materiali, personaggi, effetti e script che nomina
+        /// e le loro texture, dai fixup come --solo-usati, senza passare per gli altri file in maps/): quelle solo sue, che escono dal
+        /// livello togliendo le sue entita' (--togli-entita file:* con --solo-usati), e tutte quelle che usa
+        /// </summary>
+        private static void AppendTextureUsers(StringBuilder report, IgArchive output)
+        {
+            report.AppendLine("=== TEXTURE PER FILE ===");
+            report.AppendLine("Le texture che ogni file in maps/ si porta dietro (modelli, materiali, personaggi ed effetti che nomina, con le loro");
+            report.AppendLine("texture). \"solo sue\": nessun altro file in maps/ le usa, quindi togliendo le entita' del file (--togli-entita <file>:*,");
+            report.AppendLine("con --solo-usati) escono dal livello. Per alleggerire la memoria delle texture si comincia dai primi.");
+            var files = output.Files.Where(x => !x.Path.StartsWith("update/", StringComparison.OrdinalIgnoreCase)).ToList();
+            var byName = new Dictionary<string, List<IgArchiveFile>>();
+            foreach (IgArchiveFile file in files)
+            {
+                string name = NamespaceUtils.GetFileName(file.Path, false).ToLowerInvariant();
+                if (!byName.TryGetValue(name, out List<IgArchiveFile>? list)) byName[name] = list = [];
+                list.Add(file);
+            }
+            var byHash = new Dictionary<uint, string>();
+            foreach (string name in byName.Keys) byHash.TryAdd(NamespaceUtils.ComputeHash(name), name);
+            static bool IsTexture(IgArchiveFile file) =>
+                file.Path.StartsWith("textures/", StringComparison.OrdinalIgnoreCase) || file.Path.StartsWith("loosetextures/", StringComparison.OrdinalIgnoreCase);
+            static bool IsMap(IgArchiveFile file) => file.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase);
+            var referencedNames = new Dictionary<IgArchiveFile, HashSet<string>?>();
+            HashSet<string>? Names(IgArchiveFile file)
+            {
+                if (!referencedNames.TryGetValue(file, out HashSet<string>? names)) referencedNames[file] = names = RawReferencedNames(file);
+                return names;
+            }
+
+            // per ogni file in maps/ le texture che raggiunge, senza passare per gli altri file in maps/ (contano per conto loro)
+            // ne' per il pacchetto (elenca tutto)
+            var usersOf = new Dictionary<IgArchiveFile, int>();
+            var reach = new List<(IgArchiveFile map, List<IgArchiveFile> textures)>();
+            foreach (IgArchiveFile map in files.Where(f => IsMap(f) && f.IsIGZ()))
+            {
+                var seen = new HashSet<IgArchiveFile> { map };
+                var queue = new Queue<IgArchiveFile>();
+                queue.Enqueue(map);
+                var textures = new List<IgArchiveFile>();
+                while (queue.Count > 0)
+                {
+                    IgArchiveFile current = queue.Dequeue();
+                    if (IsTexture(current))
+                    {
+                        textures.Add(current);
+                        continue;
+                    }
+                    if (!current.IsIGZ() || Names(current) is not HashSet<string> names) continue;
+                    foreach (string referenced in names)
+                    {
+                        string target = referenced;
+                        if (target.All(char.IsDigit) && uint.TryParse(target, out uint hash) && byHash.TryGetValue(hash, out string? resolved)) target = resolved;
+                        if (!byName.TryGetValue(target, out List<IgArchiveFile>? candidates)) continue;
+                        foreach (IgArchiveFile candidate in candidates)
+                        {
+                            if (IsMap(candidate) || candidate.Path.StartsWith("packages/", StringComparison.OrdinalIgnoreCase)) continue;
+                            if (seen.Add(candidate)) queue.Enqueue(candidate);
+                        }
+                    }
+                }
+                reach.Add((map, textures));
+                foreach (IgArchiveFile texture in textures) usersOf[texture] = usersOf.GetValueOrDefault(texture) + 1;
+            }
+
+            long allTextures = files.Where(IsTexture).Sum(f => (long)f.UncompressedSize);
+            long unreached = files.Where(f => IsTexture(f) && !usersOf.ContainsKey(f)).Sum(f => (long)f.UncompressedSize);
+            report.AppendLine($"  texture nel livello: {Mb((ulong)allTextures)}; non usate da nessun file in maps/ (di Crash, dell'interfaccia, degli " +
+                              $"script comuni, o caricate e basta): {Mb((ulong)unreached)}");
+            var rows = reach
+                .Select(r => (r.map,
+                              own: r.textures.Where(t => usersOf[t] == 1).Sum(t => (long)t.UncompressedSize),
+                              ownCount: r.textures.Count(t => usersOf[t] == 1),
+                              total: r.textures.Sum(t => (long)t.UncompressedSize),
+                              count: r.textures.Count))
+                .Where(r => r.count > 0)
+                .OrderByDescending(r => r.own).ThenByDescending(r => r.total)
+                .ToList();
+            if (rows.Count == 0) report.AppendLine("  nessun file in maps/ usa texture");
+            foreach (var (map, own, ownCount, total, count) in rows.Take(45))
+                report.AppendLine($"  {Mb((ulong)own),9} solo sue ({ownCount}), {Mb((ulong)total)} in tutto ({count}): {map.Path}");
+            if (rows.Count > 45) report.AppendLine($"  ... e altri {rows.Count - 45}");
+            report.AppendLine();
+        }
+
+        /// <summary>
         /// Rapporto: le partenze (CPlayerStartEntity) dei file del livello e la telecamera con cui comincia ognuna, con i suoi valori;
         /// per una telecamera su una spline (CSplineCamera) anche la spline: punti, dove stanno, distanza dalla partenza. Se la
         /// telecamera non si trova, o guarda da un punto lontano o impossibile, lo schermo puo' restare nero con il gioco che va
@@ -5909,7 +6055,15 @@ namespace NST
                 .Select(a => (name: a.Key, size: a.Value.Where(f => IsTexturePath(f.Path)).Sum(f => (long)f.UncompressedSize)))
                 .OrderByDescending(a => a.size)
                 .ToList();
-            report.AppendLine($"Texture del livello: {Mb((ulong)textureTotal)}.");
+            int textureCount = files.Count(f => IsTexturePath(f.Path));
+            report.AppendLine($"Texture del livello: {Mb((ulong)textureTotal)} ({textureCount} file).");
+            // texture che stanno anche in archivi che non sono di un livello (comuni): il gioco potrebbe averle gia' caricate
+            static bool IsLevelArchiveName(string name) => name.Length > 5 && (name[0] == 'l' || name[0] == 'b') && char.IsDigit(name[1]) && name[4] == '_';
+            var commonPaths = new HashSet<string>(sw.ByArchive.Where(a => !IsLevelArchiveName(a.Key)).SelectMany(a => a.Value).Select(f => f.Path.ToLowerInvariant()));
+            List<IgArchiveFile> commonTextures = files.Where(f => IsTexturePath(f.Path) && commonPaths.Contains(f.Path.ToLowerInvariant())).ToList();
+            if (commonTextures.Count > 0)
+                report.AppendLine($"  di queste anche negli archivi comuni del gioco (non di un livello; se il gioco le ha gia' caricate non pesano due " +
+                                  $"volte): {Mb((ulong)commonTextures.Sum(f => (long)f.UncompressedSize))} ({commonTextures.Count} file)");
             if (originalTextures.Count > 0)
             {
                 string? refKey = reference?.ToLowerInvariant();
@@ -5931,7 +6085,9 @@ namespace NST
                 textureOrigins[origin] = (size + (long)texture.UncompressedSize, count + 1);
             }
             if (textureOrigins.Count > 0)
-                report.AppendLine("  provenienza: " + string.Join(", ", textureOrigins.OrderByDescending(t => t.Value.size).Take(15)
+                report.AppendLine("  archivio Switch da cui sono prese (una che sta in piu' archivi conta nel primo in ordine alfabetico: non e' il " +
+                                  "livello da cui viene la decorazione, per quello vedi TEXTURE PER FILE): " +
+                                  string.Join(", ", textureOrigins.OrderByDescending(t => t.Value.size).Take(15)
                                                                   .Select(t => $"{t.Key} {Mb((ulong)t.Value.size)} ({t.Value.count})")));
             report.AppendLine();
         }

@@ -62,7 +62,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita]
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
-        [--memoria modello|max|<livello>|<MB>[/<MB>]] [--pc-originali <cartella_archives_pc>]
+        [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>]
+        [--pc-originali <cartella_archives_pc>]
 ```
 
 Un'opzione scritta male (`--solo-usato`), un'opzione senza il suo valore o con un valore non
@@ -164,6 +165,13 @@ Dettagli:
   un livello pesante (schermo nero, caricamento bloccato) ha finito la memoria; se la Switch non
   ha tanta memoria libera il gioco potrebbe bloccarsi al caricamento. La zone info dell'editor
   PC ha circa 910 e 890 MB.
+- `--prova-texture <MB>` (prova, dalla v57): aggiunge al pacchetto del livello tante texture
+  quanti MB indicati, prese dagli archivi dei livelli originali tra quelle che il livello non usa
+  e che non stanno negli archivi comuni (un po' da tutti i livelli, piccole e grandi, come le
+  texture vere di un livello). Il gioco le carica con il livello senza usarle: le entità restano
+  le stesse e cresce solo la memoria delle texture. Su un livello che si vede (per esempio con
+  `--togli-entita "*"`), se con le texture in più lo schermo diventa nero (o il caricamento si
+  blocca) il problema è la memoria delle texture; se si vede ancora, è un'entità.
 - `--riflessi auto|si|no` (con `--nuovo`, dalla v41): riflessi planari nella zone info
   (`_planarReflectionsEnabled`). Il ghiaccio che riflette dei livelli di neve di Crash 2 (Snow Go,
   Cold Hard Crash, Bear It...) sulla Switch disegna il riflesso che il gioco calcola solo se la zone
@@ -540,8 +548,15 @@ ma non disegna il livello (il Level 7 di Oichi, anche senza l'intro di Crash 3).
 rapporto che aiutano a capire perché (dalla v56):
 
 - `MEMORIA`: anche le texture, che in un livello fatto con oggetti di tanti livelli sono quasi
-  tutta la memoria: quante sono, quante ne hanno gli archivi dei livelli originali e da quale
-  archivio Switch vengono (il livello di provenienza dei file che le usano);
+  tutta la memoria: quante sono (MB e file), quante ne hanno gli archivi dei livelli originali,
+  quante stanno anche negli archivi comuni del gioco e da quale archivio Switch sono prese (dalla
+  v57 detto chiaro: se una texture sta in più archivi conta il primo in ordine alfabetico, che
+  non è il livello da cui viene la decorazione);
+- `TEXTURE PER FILE` (dalla v57): per ogni file in `maps/` le texture che si porta dietro
+  (modelli, materiali, personaggi ed effetti che nomina, con le loro texture), "solo sue" (nessun
+  altro file le usa: escono dal livello togliendo le entità del file, con `--togli-entita
+  <file>:*` e `--solo-usati`) e in tutto. Per alleggerire la memoria delle texture si comincia
+  dai primi;
 - `LUCI, VOLUMI DI COLORE E BOX VISIVI`: quante luci e volumi di colore per file. Un file di luci
   di un altro livello copiato dall'editor PC può averne più dell'originale Switch, alleggerito
   (`L320_TombWader_lighting`: 104 entità sul PC, 84 sulla Switch);
@@ -568,6 +583,20 @@ Prove, una alla volta, per capire da dove viene:
 Mentre lo schermo è nero conviene anche ascoltare: se la musica parte e premendo salto o
 giravolta si sentono i suoni di Crash, il livello va e manca solo l'immagine (telecamera,
 grafica, memoria delle texture); se non si sente niente il livello non è partito davvero.
+
+Con il Level 7 (v56): con `--togli-entita "*"` l'immagine c'è (texture da 107 a 65 MB), senza i
+file di luci di altri livelli resta nera. Quindi il problema viene da quello che il livello
+prende da altri livelli, non dalle luci: o la memoria delle texture (107 MB nell'archivio del
+livello; il Level 3, che si vede, ne ha 94; gli archivi dei livelli originali arrivano a 69, ma
+quelli prendono anche texture dagli archivi comuni) o un'entità. Le prove della v57 per
+separare le due cose:
+
+4. `--togli-entita "*" --prova-texture 60`: come la prova 1 (che si vede) ma con 60 MB di
+   texture in più che nessuno usa: se diventa nero è la memoria delle texture;
+5. senza le decorazioni prese da altri livelli (`--togli-entita "_Art:*" --togli-entita
+   "_Meshes:*" --togli-entita "_Geo:*" --togli-entita "Design_Core_Set:*" --togli-entita
+   "L105_Upstream.igz:*"`), con nemici, piattaforme e ostacoli: se si vede il problema è nelle
+   decorazioni (di solito la memoria), se resta nero è tra nemici, piattaforme e ostacoli.
 
 ## Altri comandi
 
