@@ -2579,7 +2579,14 @@ namespace NST
                                 Refs(entity).Where(n => !n.All(char.IsDigit) && !n.StartsWith("meta") && !availableNames.Contains(n)).OrderBy(n => n).ToList();
                             bool modified = false;
 
-                            DescribeOtherLevelFile(otherContent, path, igz, original, inPcPackage, Refs, MissingRefs);
+                            // Modalita' del livello da cui viene il file (masso, orso, sub...), per il rapporto e per le entita' di
+                            // livelli con un'altra modalita' (sotto)
+                            var sourceLevel = SourceLevelModes(path);
+                            string? modeInfo = sourceLevel == null ? null
+                                : $"    {sourceLevel.Value.level} e' un livello con {(sourceLevel.Value.modes.Count > 1 ? "le modalita'" : "la modalita'")} " +
+                                  $"{string.Join("/", sourceLevel.Value.modes.Select(ModeDescription))}: " +
+                                  (sourceLevel.Value.modes.Overlaps(levelModes) ? "ce l'ha anche il livello convertito" : "il livello convertito non ce l'ha");
+                            DescribeOtherLevelFile(otherContent, path, igz, original, inPcPackage, Refs, MissingRefs, modeInfo);
 
                             var chosen = new HashSet<igObject>();
                             // posizione delle entita' nel file, per le parti di --togli-entita (file:#k/n)
@@ -2608,7 +2615,6 @@ namespace NST
                             // aspettano quella modalita' e il gioco resta su LOADING (Level 11 con i nemici di Under Pressure e
                             // le corsie di Orient Express e Midnight Run). Solo nei file nel pacchetto, di cui il gioco carica
                             // tutte le entita'. Le decorazioni restano; --tieni-entita-modalita le lascia tutte
-                            var sourceLevel = SourceLevelModes(path);
                             if (inPcPackage && !options.KeepModeEntities && sourceLevel != null && !sourceLevel.Value.modes.Overlaps(levelModes))
                             {
                                 var modeEntities = igz.Objects.OfType<igEntity>()
@@ -2628,13 +2634,14 @@ namespace NST
                                 }
                             }
 
-                            // Entita' che bloccano il caricamento anche quando il livello ha la loro modalita', trovate con le prove
-                            // (vedi _knownBlockingEntities). Solo nei file nel pacchetto; --tieni-entita-modalita le lascia
+                            // Entita' che bloccano il caricamento, trovate con le prove (vedi _knownBlockingEntities): i pinguini fermi
+                            // di Snow Go anche quando il livello ha la loro modalita', i cancelli elettrici di Crash Dash se il livello
+                            // non ha il masso. Solo nei file nel pacchetto; --tieni-entita-modalita le lascia
                             if (inPcPackage && !options.KeepModeEntities)
                             {
                                 var blocking = new Dictionary<igObject, string>();
                                 foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
-                                    if (KnownBlockingEntity(candidate, Refs(candidate)) is string description) blocking[candidate] = description;
+                                    if (KnownBlockingEntity(candidate, Refs(candidate), levelModes) is string description) blocking[candidate] = description;
                                 if (blocking.Count > 0)
                                 {
                                     string names = string.Join(", ", blocking.Keys.Take(12).Select(e => e.ObjectName ?? "?")) + (blocking.Count > 12 ? $" e altre {blocking.Count - 12}" : "");
@@ -3792,6 +3799,9 @@ namespace NST
                 report.AppendLine("per tipo e componenti (quante, esempi, file che usano), quelle che usano file che il gioco Switch non ha");
                 report.AppendLine("(MANCA) e il confronto con l'originale Switch. Per toglierne alcune: --togli-entita <file>:<testo>");
                 report.AppendLine("(testo nel nome, nel tipo, nei componenti o nei file usati; * = tutte).");
+                report.AppendLine($"Modalita' del livello convertito (scelte nell'editor): " +
+                                  $"{(levelModes.Count == 0 ? "nessuna" : string.Join(", ", levelModes.OrderBy(m => m).Select(ModeDescription)))}. " +
+                                  "Le entita' dei livelli con un'altra modalita' possono tenere il gioco su LOADING.");
                 report.Append(otherContent);
                 report.AppendLine();
             }
@@ -4856,7 +4866,8 @@ namespace NST
         /// file che il gioco Switch non ha, altri oggetti) e confronto con l'originale Switch dello stesso file
         /// </summary>
         private static void DescribeOtherLevelFile(StringBuilder sb, string path, IgzFile igz, IgArchiveFile? switchOriginal, bool inPackage,
-                                                   Func<igEntity, HashSet<string>> refs, Func<igEntity, List<string>> missingRefs)
+                                                   Func<igEntity, HashSet<string>> refs, Func<igEntity, List<string>> missingRefs,
+                                                   string? modeInfo = null)
         {
             try
             {
@@ -4881,6 +4892,7 @@ namespace NST
                 sb.AppendLine(inPackage
                     ? "    nel pacchetto: il gioco carica tutte le sue entita'"
                     : "    fuori dal pacchetto: il gioco usa solo gli oggetti a cui il livello fa riferimento (--solo-usati non lo tocca)");
+                if (modeInfo != null) sb.AppendLine(modeInfo);
 
                 if (originalNames != null)
                 {
@@ -6388,21 +6400,35 @@ namespace NST
         }
 
         /// <summary>
-        /// Entita' di altri livelli che, trovate con le prove, tengono il gioco su LOADING anche in un livello con la loro
-        /// modalita': testo nel nome (o nei file che usa) e descrizione per il rapporto
+        /// Entita' di altri livelli che, trovate con le prove, tengono il gioco su LOADING: testo nel nome (o nei file che usa),
+        /// descrizione per il rapporto e modalita' del livello con cui restano (null: si tolgono sempre, anche in un livello con
+        /// la loro modalita'). Solo dai file di altri livelli: nei file del livello stesso possono essere quelle di un livello
+        /// originale modificato, dove funzionano
         /// </summary>
-        private static readonly (string fragment, string description)[] _knownBlockingEntities =
+        private static readonly (string fragment, string description, string? keptWithMode)[] _knownBlockingEntities =
         [
             // Level 10 (v40): si carica solo togliendo i pinguini fermi di Snow Go (le foche e gli altri pinguini restano)
-            ("arctic_enemy_immobile_penguin", "pinguini fermi di Snow Go"),
+            ("arctic_enemy_immobile_penguin", "pinguini fermi di Snow Go", null),
+            // Level A2 (v61): The Lab senza modalita' resta su LOADING con i cancelli elettrici di Crash Dash (livello del masso);
+            // togliendo solo quelli si carica (le mine che rimbalzano dello stesso file restano). In un livello con il masso,
+            // come in Crash Dash, restano (non provato)
+            ("jungle_hazard_electricgate", "cancelli elettrici di Crash Dash", "boulder"),
         ];
 
-        private static string? KnownBlockingEntity(igEntity entity, HashSet<string> references)
+        /// <summary>
+        /// Descrizione per il rapporto se l'entita' e' una di quelle che bloccano il caricamento (_knownBlockingEntities) e va
+        /// tolta da un livello con queste modalita', altrimenti null
+        /// </summary>
+        private static string? KnownBlockingEntity(igEntity entity, HashSet<string> references, HashSet<string> levelModes)
         {
             string name = entity.ObjectName ?? "";
-            foreach (var (fragment, description) in _knownBlockingEntities)
+            foreach (var (fragment, description, keptWithMode) in _knownBlockingEntities)
+            {
+                if (keptWithMode != null && levelModes.Contains(keptWithMode)) continue;
                 if (name.Contains(fragment, StringComparison.OrdinalIgnoreCase) ||
-                    references.Any(r => r.Contains(fragment, StringComparison.OrdinalIgnoreCase))) return description;
+                    references.Any(r => r.Contains(fragment, StringComparison.OrdinalIgnoreCase)))
+                    return keptWithMode == null ? description : $"{description}, senza la modalita' {ModeDescription(keptWithMode)}";
+            }
             return null;
         }
 

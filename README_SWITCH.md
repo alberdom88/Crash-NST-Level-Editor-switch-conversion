@@ -339,6 +339,18 @@ Dettagli:
   (`Arctic_Enemy_Immobile_Penguin`, con quelli Level 10 resta su LOADING; foche e altri pinguini
   restano). Righe `blocca il caricamento` nel rapporto; anche queste restano con
   `--tieni-entita-modalita`.
+  Dalla v61 anche i cancelli elettrici di Crash Dash (`Jungle_Hazard_ElectricGate`), se il
+  livello non ha il masso: il Level A2 (The Lab, senza modalità, con oggetti di Crash Dash, Hog
+  Wild, Un-Bearable e dei livelli della fabbrica di Crash 1) restava su LOADING; togliendo tutte
+  le entità di `L205_CrashDash_Hazards` si caricava, togliendo solo i cancelli anche. Restano le
+  mine che rimbalzano dello stesso file (`Chase_BounceMine`), i tronchi con le punte di Hog Wild
+  (`VertSpikeLog`, con lo script degli ostacoli dei carretti) e le staccionate di Un-Bearable. I
+  cancelli non usano `metaobject` come i nemici, per questo la regola delle modalità non li
+  toglieva. In un livello con il masso (`{boulder}`, come un Crash Dash modificato) restano, come
+  nell'originale (non provato). Come i pinguini, si tolgono solo dai file di altri livelli: nei
+  file del livello stesso possono essere quelli di un livello originale modificato. La sezione
+  `CONTENUTO DEI FILE DI ALTRI LIVELLI` dice le modalità del livello convertito e, per ogni file
+  di un livello con una modalità, se il livello convertito ce l'ha.
 - Modelli delle entità indicati per nome (dalla v42; dalla v46 anche quelli delle decorazioni):
   molte entità indicano il modello con un testo: le decorazioni (muri, rocce, pavimenti) in
   `CModelComponentData._fileName` (`models:\Levels\Crash2\Snow\C2_Snow_Island03.igb`), casse e
@@ -437,7 +449,9 @@ Dettagli:
   nasconde tutte e due. Nei livelli senza tessere i contatori restano a 0 e l'HUD fa quello che
   faceva; in Crash 1 non cambia niente. Lo script viene riscritto e riletto per controllo.
   `--tessere-senza-hud` lascia l'HUD com'è (le tessere si contano ma in alto non si vedono; il
-  teletrasporto mostra comunque quante ne hai prese).
+  teletrasporto mostra comunque quante ne hai prese). Con le due copie in `update.pak` il Level A2
+  (Crash 3, con un teletrasporto e una tessera di Tawna) si carica: il blocco al caricamento
+  veniva dai cancelli elettrici di Crash Dash (vedi le entità di livelli con un'altra modalità).
   La sezione `TESSERE DEI BONUS DI CRASH 1 (analisi)` (dalla v50) elenca i teletrasporti del livello
   e quelli degli originali di Crash 1 per confronto, le tessere per tipo, il gestore nei dati dei
   personaggi, l'HUD, i contatori (valore iniziale, durata) e gli script che guardano il gioco (anno,
@@ -646,6 +660,28 @@ completi da soli e nominano l'insieme solo come "proprietario"; con l'insieme di
 quel riferimento porta a materiali diversi. Dalla v60 il convertitore non prende più dipendenze
 dall'archivio di un altro livello quando quello del file che le usa non le ha (vedi "Dipendenze
 della grafica aggiunte alla fine"): il Level 7 si converte senza opzioni di prova.
+
+### Caricamento bloccato (LOADING)
+
+Se il livello resta sulla schermata di caricamento, di solito è un'entità presa da un altro
+livello che aspetta qualcosa che nel livello nuovo non c'è (la sua modalità, un altro pezzo del
+suo livello). Il convertitore toglie da solo quelle già trovate (vedi "Entità di livelli con
+un'altra modalità" nei dettagli del comando `converti`); per le altre, una prova alla volta
+(reinstallando ogni volta anche `update.pak`):
+
+1. `--togli-entita "*"`: toglie tutte le entità dei file di altri livelli. Se si carica, il
+   blocco è lì; se no è nei file del livello, nelle copie in `update.pak` (gestore e HUD delle
+   tessere) o nell'intro di Crash 3: prova `--gioco crash1` (niente intro di Crash 3 e niente
+   copie in `update.pak`);
+2. un file alla volta (`--togli-entita "<file>:*"`), cominciando da quelli dei livelli con una
+   modalità che il livello non ha: la sezione `CONTENUTO DEI FILE DI ALTRI LIVELLI` dice le
+   modalità del livello e dei file;
+3. nel file giusto, per tipo (`--togli-entita "<file>:<testo del nome>"`) o a metà (`#1/2`,
+   `#2/2`, poi a quarti).
+
+Con il Level A2 (v60): con `--togli-entita "L205_CrashDash_Hazards:*"` si carica, con
+`--togli-entita "L205_CrashDash_Hazards:ElectricGate"` pure. Sono i cancelli elettrici di Crash
+Dash, che dalla v61 si tolgono da soli nei livelli senza il masso.
 
 ## Altri comandi
 
