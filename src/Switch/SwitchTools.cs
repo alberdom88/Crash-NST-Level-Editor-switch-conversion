@@ -78,6 +78,9 @@ namespace NST
             // converti: dei file di altri livelli tiene solo gli oggetti che il livello usa, e toglie la grafica
             // (modelli, materiali, texture) che dopo non usa piu' nessuno (prova)
             public bool OnlyUsed;
+            // converti: le dipendenze della grafica che mancano si prendono anche dall'archivio di un altro livello quando
+            // l'archivio Switch del file che le usa non le ha (come fino alla v59; dalla v60 no: Level 7, schermo nero)
+            public bool DependenciesFromOtherLevels;
             // --nuovo: archivio in cui registrare il livello: "update" (update.pak, come l'editor PC) o
             // "chunkinfos" (copia di chunkInfos.pak, dove il gioco tiene le zone info dei suoi livelli)
             public string RegisterIn = "update";
@@ -253,6 +256,7 @@ namespace NST
                 else if (name == "--aggiungi-intro") { options.AddIntro = true; rest.RemoveAt(i); }
                 else if (name == "--senza-modalita") { options.WithoutMode = true; rest.RemoveAt(i); }
                 else if (name == "--solo-usati") { options.OnlyUsed = true; rest.RemoveAt(i); }
+                else if (name == "--dipendenze-altri-livelli") { options.DependenciesFromOtherLevels = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-entita-modalita") { options.KeepModeEntities = true; rest.RemoveAt(i); }
                 else if (name == "--tieni-occlusioni") { options.KeepOcclusion = true; rest.RemoveAt(i); }
                 else if (name == "--tessere-solo-crash1") { options.TokensOnlyCrash1 = true; rest.RemoveAt(i); }
@@ -338,7 +342,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>] [--descrivi <testo>]... [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--dipendenze-altri-livelli] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>] [--descrivi <testo>]... [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -3230,6 +3234,8 @@ namespace NST
             // materiale o senza texture. Si aggiungono dall'archivio Switch del file che le usa, o da un altro che le ha
             var graphicsDependencies = new List<string>();
             var excludedDependencies = new List<string>();
+            var skippedDependencies = new List<string>();
+            var skippedDependencyKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             {
                 var levelArchiveSet = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
                     .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
@@ -3285,6 +3291,17 @@ namespace NST
                         string? userArchive = archiveOfPath.GetValueOrDefault(user.Path.ToLowerInvariant());
                         List<IgArchiveFile>? candidates = null;
                         if (userArchive != null && sw.Names(userArchive).TryGetValue(name, out List<IgArchiveFile>? inArchive)) candidates = inArchive;
+                        else if (userArchive != null && !options.DependenciesFromOtherLevels)
+                        {
+                            // Il file che la usa viene dall'archivio Switch di un livello che non la ha (ne' negli archivi comuni): in quel
+                            // livello il gioco funziona senza, e presa da un altro livello puo' fare danni. Nel Level 7 i cristalli di Koala
+                            // Kong (materiali di b103_koalakong) nominano l'insieme C1_KoalaKong_Cave_materials, che ha solo Stormy Ascent:
+                            // aggiunto fino alla v59, lo schermo restava nero (dalla v60 no, --dipendenze-altri-livelli per riaverlo)
+                            if (switchByName.TryGetValue(name, out List<IgArchiveFile>? elsewhere) && skippedDependencyKeys.Add($"{name}|{userArchive}"))
+                                skippedDependencies.Add($"  NON AGGIUNTA: {elsewhere[0].Path} (c'e' in {sw.ArchiveOf.GetValueOrDefault(elsewhere[0]) ?? "?"}.pak), " +
+                                                        $"usata da {NamespaceUtils.GetFileName(user.Path)} di {userArchive}, che non la ha: l'originale funziona senza");
+                            continue;
+                        }
                         else if (switchByName.TryGetValue(name, out List<IgArchiveFile>? anywhere))
                         {
                             candidates = new List<IgArchiveFile> { anywhere[0] };
@@ -3612,6 +3629,12 @@ namespace NST
             if (graphicsDependencies.Count > 80) report.AppendLine($"  ... e altre {graphicsDependencies.Count - 80}");
             foreach (string line in excludedDependencies.Take(40)) report.AppendLine(line);
             if (excludedDependencies.Count > 40) report.AppendLine($"  ... e altre {excludedDependencies.Count - 40} escluse");
+            if (skippedDependencies.Count > 0)
+                report.AppendLine("  Non aggiunte (dalla v60): dipendenze che l'archivio Switch del file che le usa non ha, quindi nel suo livello il " +
+                                  "gioco funziona senza; prese da un altro livello possono fare danni (Level 7: schermo nero). " +
+                                  "--dipendenze-altri-livelli le prende lo stesso, come fino alla v59.");
+            foreach (string line in skippedDependencies.Take(40)) report.AppendLine(line);
+            if (skippedDependencies.Count > 40) report.AppendLine($"  ... e altre {skippedDependencies.Count - 40} non aggiunte");
             report.AppendLine();
             AppendLightVolumes(report, lightVolumes, playerStart);
             AppendOcclusionAndNearStart(report, occlusionInfos, placedEntities, playerStart, !options.KeepOcclusion);

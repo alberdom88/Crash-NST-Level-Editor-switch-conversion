@@ -53,7 +53,8 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--nuovo | --come-originale | --sostituisci <livello>]
         [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze]
         [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]...
-        [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--togli-entita [file:]testo]...
+        [--solo-usati] [--dipendenze-altri-livelli] [--tieni-entita-modalita] [--tieni-occlusioni]
+        [--togli-entita [file:]testo]...
         [--originale-switch <testo>]... [--tessere-solo-crash1] [--tessere-senza-hud]
         [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro]
         [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>]
@@ -473,6 +474,16 @@ Dettagli:
   com'era, senza toglierle.
   Nella v35 l'opzione contava come file mancante anche `metaobject` (i tipi del motore) e
   toglieva tutti i nemici, i massi e le staccionate dei file di altri livelli: dalla v36 restano.
+- Dipendenze della grafica aggiunte alla fine (sezione `DIPENDENZE DELLA GRAFICA AGGIUNTE ALLA
+  FINE`): materiali e texture che i modelli e i materiali presi dagli originali Switch nominano
+  e che mancano. Si prendono dall'archivio Switch da cui viene il file che li usa. Fino alla v59,
+  se quell'archivio non li aveva, si prendevano dall'archivio di un altro livello: nel Level 7 i
+  cristalli di Koala Kong nominano l'insieme di materiali `C1_KoalaKong_Cave_materials`, che
+  l'archivio di Koala Kong non ha (lì il gioco funziona senza) e che ha solo Stormy Ascent;
+  preso da lì, dopo il caricamento lo schermo restava nero (il menu di pausa andava). Dalla
+  v60 una dipendenza che l'archivio del file che la usa non ha non si aggiunge: il rapporto la
+  elenca come `NON AGGIUNTA`. `--dipendenze-altri-livelli` (prova) le prende lo stesso, come
+  prima.
 - `--togli-entita [file:]testo` (prova, si può ripetere): toglie dai file di altri livelli (nel
   pacchetto e fuori) le entità che hanno il testo nel nome, nel tipo, nei componenti o nei file
   che usano. Con `file:` solo dai file con quel testo nel percorso; `*` le toglie tutte. Serve a
@@ -628,6 +639,13 @@ che lo ha. Negli altri livelli convertiti quella sezione era vuota. Prove della 
 cristalli restano, l'insieme di Stormy Ascent no) e i due modelli separati
 (`B103_KoalaKong_Art:C1_Cave_Crystals`, `B103_KoalaKong_Art:C1_B103_CaveCrystals`), con
 `--descrivi KoalaKong_Cave_materials` per vedere nel rapporto com'è fatto quell'insieme.
+
+Con la v59 si vede solo la prima: è l'insieme preso da Stormy Ascent. I materiali dei cristalli
+(file `C1_KoalaKong_Cave_materials,<materiale>,<opzioni>` dell'archivio di Koala Kong) sono
+completi da soli e nominano l'insieme solo come "proprietario"; con l'insieme di un altro livello
+quel riferimento porta a materiali diversi. Dalla v60 il convertitore non prende più dipendenze
+dall'archivio di un altro livello quando quello del file che le usa non le ha (vedi "Dipendenze
+della grafica aggiunte alla fine"): il Level 7 si converte senza opzioni di prova.
 
 ## Altri comandi
 
