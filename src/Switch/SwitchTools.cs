@@ -91,6 +91,8 @@ namespace NST
             // converti: MB di texture degli archivi dei livelli originali, che nessun file usa, aggiunte al pacchetto (prova, dalla
             // v57): con le stesse entita' il livello carica piu' texture, per capire se lo schermo nero viene dalla memoria
             public int? TestTexturesMb;
+            // converti: file dell'archivio (testo nel percorso) di cui il rapporto descrive gli oggetti, tipo, nome e campi (dalla v59)
+            public List<string> Describe = [];
             // converti: entita' da togliere dai file di altri livelli copiati dall'editor, "[file:]testo" (testo nel
             // nome, nel tipo, nei componenti o nei file che usa; * = tutte), per trovare quelle che bloccano il gioco
             public List<string> RemoveEntities = [];
@@ -157,7 +159,7 @@ namespace NST
         [
             "--max", "--pak", "--pc-originali", "--igz", "--sostituisci", "--base", "--altri-livelli", "--zoneinfo-da",
             "--registra-in", "--salvataggio", "--escludi", "--ctr", "--gioco", "--memoria", "--togli-entita", "--originale-switch",
-            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento", "--intro-evento", "--prova-texture",
+            "--riflessi", "--modello-blocchi", "--pavimento-blocchi", "--intro-scostamento", "--intro-evento", "--prova-texture", "--descrivi",
         ];
 
         public static int Run(string[] args)
@@ -300,6 +302,7 @@ namespace NST
                     rest.RemoveRange(i, 2);
                 }
                 else if (name == "--togli-entita" && hasValue) { options.RemoveEntities.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
+                else if (name == "--descrivi" && hasValue) { options.Describe.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else if (name == "--originale-switch" && hasValue) { options.SwitchOriginals.Add(rest[i + 1]); rest.RemoveRange(i, 2); }
                 else i++;
             }
@@ -335,7 +338,7 @@ namespace NST
             Console.WriteLine("  NST.exe --switch struttura <cartella_dump_switch> [report.txt] [--pak nome] [--max N]");
             Console.WriteLine("  NST.exe --switch verifica <file_pc.pak> <cartella_dump_switch> [report.txt] [--max N]");
             Console.WriteLine("  NST.exe --switch riscrivi <archivio_switch.pak> <output.pak> [report.txt] [--igz nessuno|maps|tutti]");
-            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>] [--pc-originali <cartella_archives_pc>]");
+            Console.WriteLine("  NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [report.txt] [--come-originale | --sostituisci <livello> | --nuovo] [--base <livello>] [--senza-base] [--altri-livelli converti|originali|originali+dipendenze] [--zoneinfo-da <livello>|pc] [--salvataggio originale|proprio] [--escludi <testo>]... [--solo-usati] [--tieni-entita-modalita] [--tieni-occlusioni] [--tessere-solo-crash1] [--tessere-senza-hud] [--intro-crash1 | --intro-crash2] [--intro-come-editor] [--intro-scostamento <numero>] [--intro-evento <nome>] [--intro-senza-portale] [--intro-togli-portale | --intro-portale-piccolo] [--intro-alla-partenza] [--togli-entita [file:]testo]... [--originale-switch <testo>]... [--ctr <cartella_dump_ctr_switch>] [--senza-intro | --aggiungi-intro] [--registra-in update|chunkinfos] [--gioco crash1|crash2|crash3] [--senza-modalita] [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]... [--pavimento-blocchi <file>[=<decorazione>]]... [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>] [--descrivi <testo>]... [--pc-originali <cartella_archives_pc>]");
         }
 
         private static void Increment(Dictionary<string, int> counters, string key)
@@ -3226,6 +3229,7 @@ namespace NST
             // nomi che il PC non conosce, che il ciclo delle dipendenze non riconosceva: senza, la grafica resta senza
             // materiale o senza texture. Si aggiungono dall'archivio Switch del file che le usa, o da un altro che le ha
             var graphicsDependencies = new List<string>();
+            var excludedDependencies = new List<string>();
             {
                 var levelArchiveSet = new HashSet<string>(LevelNames(sw.ByPath.Keys).Select(l => l.ToLowerInvariant())
                     .Concat(sw.ByArchive.Keys.Where(a => a.Length > 5 && (a[0] == 'l' || a[0] == 'b') && char.IsDigit(a[1]) && a[4] == '_')));
@@ -3294,10 +3298,18 @@ namespace NST
                         {
                             string key = dependency.Path.ToLowerInvariant();
                             if (included.Contains(key)) continue;
-                            AddOriginal(dependency, "dipendenze della grafica aggiunte (anche per hash)");
                             string dependencyArchive = sw.ArchiveOf.GetValueOrDefault(dependency) ?? "?";
+                            string userText = $"{NamespaceUtils.GetFileName(user.Path)}{(userArchive != null ? $" di {userArchive}" : "")}";
+                            // --escludi vale anche qui (dalla v59): per provare il livello senza una dipendenza presa da un altro livello
+                            if (options.Exclude.Any(x => dependency.Path.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                excludedDependencies.Add($"  ESCLUSA (--escludi): {dependency.Path} da {dependencyArchive}.pak (usato da {userText})");
+                                lines.Add($"dipendenza della grafica esclusa (--escludi): {dependency.Path} (da {user.Path})");
+                                continue;
+                            }
+                            AddOriginal(dependency, "dipendenze della grafica aggiunte (anche per hash)");
                             archiveOfPath.TryAdd(key, dependencyArchive);
-                            graphicsDependencies.Add($"  {dependency.Path} da {dependencyArchive}.pak (usato da {NamespaceUtils.GetFileName(user.Path)})");
+                            graphicsDependencies.Add($"  {dependency.Path} da {dependencyArchive}.pak (usato da {userText})");
                             lines.Add($"dipendenza della grafica: {dependency.Path} (da {user.Path})");
                             if (dependency.IsIGZ()) pending.Enqueue(dependency);
                         }
@@ -3598,6 +3610,8 @@ namespace NST
             if (graphicsDependencies.Count == 0) report.AppendLine("  nessuna: non ne mancava nessuna");
             foreach (string line in graphicsDependencies.Take(80)) report.AppendLine(line);
             if (graphicsDependencies.Count > 80) report.AppendLine($"  ... e altre {graphicsDependencies.Count - 80}");
+            foreach (string line in excludedDependencies.Take(40)) report.AppendLine(line);
+            if (excludedDependencies.Count > 40) report.AppendLine($"  ... e altre {excludedDependencies.Count - 40} escluse");
             report.AppendLine();
             AppendLightVolumes(report, lightVolumes, playerStart);
             AppendOcclusionAndNearStart(report, occlusionInfos, placedEntities, playerStart, !options.KeepOcclusion);
@@ -3700,6 +3714,23 @@ namespace NST
                 report.AppendLine("=== VALORI IMPOSSIBILI NEI FILE CONVERTITI ===");
                 report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
                 report.AppendLine();
+            }
+            // --descrivi: gli oggetti dei file indicati, con l'archivio Switch da cui vengono
+            if (options.Describe.Count > 0)
+            {
+                try
+                {
+                    var describeOrigins = new Dictionary<string, string>();
+                    foreach (IgArchiveFile switchFile in fromSwitch)
+                        describeOrigins.TryAdd(switchFile.Path.ToLowerInvariant(), "dall'archivio Switch " + (sw.ArchiveOf.GetValueOrDefault(switchFile) ?? "?"));
+                    AppendDescribedFiles(report, output, options.Describe, describeOrigins);
+                }
+                catch (Exception e)
+                {
+                    report.AppendLine("=== FILE DESCRITTI (--descrivi) ===");
+                    report.AppendLine($"ERRORE: {e.GetType().Name}: {e.Message}");
+                    report.AppendLine();
+                }
             }
 
             // Scritto prima in un file temporaneo: se qualcosa va storto il vecchio archivio resta com'era
@@ -6024,6 +6055,53 @@ namespace NST
             report.AppendLine($"  scale delle entita' quasi zero (sotto 0,01), enormi (sopra 100) o negative: {(oddScales.Count == 0 ? "nessuna" : oddScales.Count.ToString())}");
             foreach (string scaleLine in oddScales.Take(40)) report.AppendLine("    " + scaleLine);
             if (oddScales.Count > 40) report.AppendLine($"    ... e altre {oddScales.Count - 40}");
+            report.AppendLine();
+        }
+
+        /// <summary>
+        /// Rapporto (--descrivi <testo>, dalla v59): gli oggetti dei file dell'archivio con il testo nel percorso, con tipo, nome e
+        /// campi, e l'archivio Switch da cui viene il file: per vedere com'e' fatto un file che da' problemi (un materiale, un modello)
+        /// </summary>
+        private static void AppendDescribedFiles(StringBuilder report, IgArchive output, List<string> texts, Dictionary<string, string> origins)
+        {
+            report.AppendLine("=== FILE DESCRITTI (--descrivi) ===");
+            List<IgArchiveFile> chosen = output.Files
+                .Where(f => f.IsIGZ() && texts.Any(t => f.Path.Contains(t, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (chosen.Count == 0)
+                report.AppendLine($"  nessun file dell'archivio con {string.Join(" o ", texts.Select(t => "'" + t + "'"))} nel percorso");
+            foreach (IgArchiveFile file in chosen.Take(40))
+            {
+                string origin = origins.GetValueOrDefault(file.Path.ToLowerInvariant()) ?? "convertito dal PC";
+                report.AppendLine($"  {file.Path} ({Mb((ulong)file.UncompressedSize)}, {origin})");
+                IgzFile igz;
+                try
+                {
+                    igz = file.ToIgzFile();
+                }
+                catch (Exception readError)
+                {
+                    report.AppendLine($"    non leggibile: {readError.GetType().Name}: {readError.Message}");
+                    continue;
+                }
+                foreach (igObject obj in igz.Objects.Take(150))
+                {
+                    string text;
+                    try
+                    {
+                        text = DeepFieldsText(obj, igz.GameVersion, 0);
+                    }
+                    catch (Exception fieldsError)
+                    {
+                        text = $"campi non leggibili ({fieldsError.GetType().Name})";
+                    }
+                    if (text.Length > 1500) text = text.Substring(0, 1500) + " ...";
+                    report.AppendLine($"    [{obj.GetType().Name}] {obj.ObjectName ?? "-"}{(obj.Reference != null ? " @" + RefText(obj.Reference) : "")}: {text}");
+                }
+                if (igz.Objects.Count > 150) report.AppendLine($"    ... e altri {igz.Objects.Count - 150} oggetti");
+            }
+            if (chosen.Count > 40) report.AppendLine($"  ... e altri {chosen.Count - 40} file");
             report.AppendLine();
         }
 

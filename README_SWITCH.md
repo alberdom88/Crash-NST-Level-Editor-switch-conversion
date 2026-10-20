@@ -63,7 +63,7 @@ NST.exe --switch converti <file_pc.pak> <cartella_dump_switch> <output.pak> [rep
         [--riflessi auto|si|no] [--modello-blocchi <file>=<modello>]...
         [--pavimento-blocchi <file>[=<decorazione>]]...
         [--memoria modello|max|<livello>|<MB>[/<MB>]] [--prova-texture <MB>]
-        [--pc-originali <cartella_archives_pc>]
+        [--descrivi <testo>]... [--pc-originali <cartella_archives_pc>]
 ```
 
 Un'opzione scritta male (`--solo-usato`), un'opzione senza il suo valore o con un valore non
@@ -190,7 +190,13 @@ Dettagli:
   ha nel dump) con dentro anche quella del livello nuovo: si installa al posto del
   `chunkInfos.pak` del gioco, e `update.pak` non viene scritto.
 - `--escludi <testo>`: lascia fuori dall'archivio i file il cui percorso contiene il testo (si
-  può ripetere).
+  può ripetere). Dalla v59 vale anche per le dipendenze della grafica che il convertitore
+  aggiunge alla fine prendendole dagli originali Switch (anche da un altro livello): il rapporto
+  le elenca come `ESCLUSA`.
+- `--descrivi <testo>` (dalla v59, si può ripetere): nel rapporto, sezione `FILE DESCRITTI`, gli
+  oggetti dei file dell'archivio con il testo nel percorso (tipo, nome e campi) e l'archivio
+  Switch da cui viene ciascun file: per vedere com'è fatto un file che dà problemi (un materiale,
+  un modello).
 - Asset di Crash Team Racing (`Octane` nel percorso): la Switch non li ha e la loro grafica non si
   converte, quindi gli oggetti resterebbero senza modello. Dalla v38 restano fuori da soli (prima
   serviva `--escludi Octane`): il livello si carica senza quella parte di grafica. Con `--ctr`
@@ -611,6 +617,17 @@ B103_KoalaKong_Art:crystal`, `...:stalag`), o a metà (`...:#1/2`, `...:#2/2`, p
 dentro la metà giusta). Nel rapporto la riga `modelli` e la riga `materiali sostituiti` del file
 dicono quali modelli e quali sostituzioni di materiale ci sono, e i `VALORI IMPOSSIBILI` anche le
 scale quasi zero, enormi o negative delle entità.
+
+Con la v58: togliendo solo i cristalli di Koala Kong (`B103_KoalaKong_Art:crystal`, 56 entità con
+i modelli `C1_B103_CaveCrystals` e `C1_Cave_Crystals`) l'immagine torna. I loro materiali sono
+dell'insieme `C1_KoalaKong_Cave_materials`, il cui file l'archivio PC non aveva: il convertitore
+l'ha aggiunto alla fine (`DIPENDENZE DELLA GRAFICA AGGIUNTE ALLA FINE`) prendendolo con le sue
+texture dall'archivio di un altro livello, Stormy Ascent (`l128_stormyascent`), perché è l'unico
+che lo ha. Negli altri livelli convertiti quella sezione era vuota. Prove della v59 per capire se
+è quell'aggiunta o sono i cristalli stessi: `--escludi C1_KoalaKong_Cave_materials.igz` (i
+cristalli restano, l'insieme di Stormy Ascent no) e i due modelli separati
+(`B103_KoalaKong_Art:C1_Cave_Crystals`, `B103_KoalaKong_Art:C1_B103_CaveCrystals`), con
+`--descrivi KoalaKong_Cave_materials` per vedere nel rapporto com'è fatto quell'insieme.
 
 ## Altri comandi
 
