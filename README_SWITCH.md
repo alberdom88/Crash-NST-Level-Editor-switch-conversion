@@ -476,7 +476,12 @@ Dettagli:
   Senza `file:` vale solo per i file di altri livelli; dalla v48, indicando il file, anche per quelli
   del livello stesso (il file principale, l'illuminazione...), per provare senza l'editor: per esempio
   `--togli-entita Custom_Level_lighting:*` (il nome del file come nell'editor o come nell'archivio
-  convertito).
+  convertito). Dalla v58 il testo vale anche per il modello delle decorazioni (per esempio
+  `--togli-entita B103_KoalaKong_Art:C1_Rock04` toglie le decorazioni con quel modello: i modelli
+  di ogni file sono nella riga `modelli` della sezione `CONTENUTO DEI FILE DI ALTRI LIVELLI`) e
+  `#k/n` toglie la parte k di n delle entità del file, nell'ordine del file (`#1/2` la prima metà,
+  `#3/4` il terzo quarto, `#2-3/4` il secondo e il terzo): serve a trovare un'entità dimezzando,
+  senza conoscerne il nome.
 - `--originale-switch <testo>` (prova, si può ripetere): i file di altri livelli con il testo
   nel percorso si prendono dall'originale Switch invece di convertire la copia del PC, con le
   loro dipendenze dallo stesso archivio Switch. Se con l'originale il livello si carica e con la
@@ -597,6 +602,15 @@ separare le due cose:
    "_Meshes:*" --togli-entita "_Geo:*" --togli-entita "Design_Core_Set:*" --togli-entita
    "L105_Upstream.igz:*"`), con nemici, piattaforme e ostacoli: se si vede il problema è nelle
    decorazioni (di solito la memoria), se resta nero è tra nemici, piattaforme e ostacoli.
+
+Risultati con il Level 7 (v57): la prova 4 si vede (non è la memoria delle texture), la 5 pure
+(è nelle decorazioni) e togliendo solo le decorazioni di `B103_KoalaKong_Art` (612 entità: sassi,
+cristalli e stalagmiti di Koala Kong, sulla Switch l'originale ne ha 128) l'immagine torna. Per
+trovare quali (dalla v58): per tipo, con il nome o il modello (`--togli-entita
+B103_KoalaKong_Art:crystal`, `...:stalag`), o a metà (`...:#1/2`, `...:#2/2`, poi a quarti
+dentro la metà giusta). Nel rapporto la riga `modelli` e la riga `materiali sostituiti` del file
+dicono quali modelli e quali sostituzioni di materiale ci sono, e i `VALORI IMPOSSIBILI` anche le
+scale quasi zero, enormi o negative delle entità.
 
 ## Altri comandi
 

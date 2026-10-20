@@ -2575,13 +2575,18 @@ namespace NST
                             DescribeOtherLevelFile(otherContent, path, igz, original, inPcPackage, Refs, MissingRefs);
 
                             var chosen = new HashSet<igObject>();
-                            foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
+                            // posizione delle entita' nel file, per le parti di --togli-entita (file:#k/n)
+                            List<igEntity> filterEntities = igz.Objects.OfType<igEntity>().ToList();
+                            for (int entityIndex = 0; entityIndex < filterEntities.Count; entityIndex++)
+                            {
+                                igEntity candidate = filterEntities[entityIndex];
                                 foreach (string filter in options.RemoveEntities)
-                                    if (EntityFilterMatches(filter, path, candidate, Refs(candidate)))
+                                    if (EntityFilterMatches(filter, path, candidate, Refs(candidate), entityIndex, filterEntities.Count))
                                     {
                                         chosen.Add(candidate);
                                         usedFilters.Add(filter);
                                     }
+                            }
                             if (chosen.Count > 0)
                             {
                                 string names = string.Join(", ", chosen.Take(12).Select(e => e.ObjectName ?? "?")) + (chosen.Count > 12 ? $" e altre {chosen.Count - 12}" : "");
@@ -2731,13 +2736,15 @@ namespace NST
                             var ownChosen = new HashSet<igObject>();
                             if (ownFilters.Count > 0)
                             {
-                                foreach (igEntity candidate in igz.Objects.OfType<igEntity>())
+                                List<igEntity> ownEntities = igz.Objects.OfType<igEntity>().ToList();
+                                for (int ownIndex = 0; ownIndex < ownEntities.Count; ownIndex++)
                                 {
+                                    igEntity candidate = ownEntities[ownIndex];
                                     HashSet<string> candidateRefs = EntityReferences(candidate, igz);
                                     foreach (string filter in ownFilters)
                                     {
-                                        if (!EntityFilterMatches(filter, path, candidate, candidateRefs) &&
-                                            !EntityFilterMatches(filter, target, candidate, candidateRefs)) continue;
+                                        if (!EntityFilterMatches(filter, path, candidate, candidateRefs, ownIndex, ownEntities.Count) &&
+                                            !EntityFilterMatches(filter, target, candidate, candidateRefs, ownIndex, ownEntities.Count)) continue;
                                         ownChosen.Add(candidate);
                                         usedFilters.Add(filter);
                                     }
@@ -4734,9 +4741,11 @@ namespace NST
 
         /// <summary>
         /// --togli-entita "[file:]testo": il file (testo nel percorso) e il testo nel nome dell'entita', nel tipo, nei
-        /// componenti o nei file che usa. Testo vuoto o * = tutte le entita' del file
+        /// componenti, nel modello (dalla v58) o nei file che usa. Testo vuoto o * = tutte le entita' del file. "#k/n" (dalla
+        /// v58): la parte k di n delle entita' del file, nell'ordine del file ("#k-l/n" dalla parte k alla l), per trovare
+        /// un'entita' dimezzando senza conoscerne il nome; index e count sono la posizione dell'entita' e quante sono
         /// </summary>
-        private static bool EntityFilterMatches(string filter, string path, igEntity entity, HashSet<string> references)
+        private static bool EntityFilterMatches(string filter, string path, igEntity entity, HashSet<string> references, int index = -1, int count = 0)
         {
             string file = "", text = filter.Trim();
             int colon = text.IndexOf(':');
@@ -4747,11 +4756,46 @@ namespace NST
             }
             if (file.Length > 0 && !path.Contains(file, StringComparison.OrdinalIgnoreCase)) return false;
             if (text.Length == 0 || text == "*") return true;
+            if (TryParseEntityPart(text, out int firstPart, out int lastPart, out int parts))
+            {
+                if (index < 0 || count <= 0) return false;
+                int part = (int)((long)index * parts / count) + 1;
+                return part >= firstPart && part <= lastPart;
+            }
             if ((entity.ObjectName ?? "").Contains(text, StringComparison.OrdinalIgnoreCase)) return true;
             if (entity.GetType().Name.Contains(text, StringComparison.OrdinalIgnoreCase)) return true;
             if (entity.GetComponents().Any(c => c.GetType().Name.Contains(text, StringComparison.OrdinalIgnoreCase))) return true;
+            if (EntityModelNames(entity).Any(m => m.Contains(text, StringComparison.OrdinalIgnoreCase))) return true;
             return references.Any(r => r.Contains(text, StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>
+        /// "#k/n" o "#k-l/n" di --togli-entita: parti da k a l (da 1) di n. False se il testo non e' cosi'
+        /// </summary>
+        private static bool TryParseEntityPart(string text, out int first, out int last, out int parts)
+        {
+            first = last = parts = 0;
+            if (!text.StartsWith('#')) return false;
+            string[] halves = text.Substring(1).Split('/');
+            if (halves.Length != 2 || !int.TryParse(halves[1].Trim(), out parts) || parts < 1 || parts > 100000) return false;
+            string[] range = halves[0].Split('-');
+            if (range.Length > 2 || !int.TryParse(range[0].Trim(), out first)) return false;
+            last = first;
+            if (range.Length == 2 && !int.TryParse(range[1].Trim(), out last)) return false;
+            return first >= 1 && last >= first && last <= parts;
+        }
+
+        /// <summary>
+        /// Modelli di un'entita' (CModelComponentData._fileName, per esempio "models:\Levels\Crash1\jungle\C1_Rock04.igb"), senza
+        /// cartella ne' estensione
+        /// </summary>
+        private static List<string> EntityModelNames(igEntity entity) =>
+            entity.GetComponents().OfType<CModelComponentData>()
+                  .Select(model => model._fileName)
+                  .Where(name => !string.IsNullOrWhiteSpace(name))
+                  .Select(name => Path.GetFileNameWithoutExtension(name!.Replace('\\', '/')))
+                  .Where(name => name.Length > 0)
+                  .ToList();
 
         /// <summary>
         /// Rapporto: contenuto di un file di un altro livello (entita' raggruppate per tipo e componenti, quelle che usano
@@ -4806,6 +4850,44 @@ namespace NST
                     sb.AppendLine($"    {group.Count(),4}x {group.Key}  es. {examples}{(used.Count > 0 ? "  usa: " + string.Join(", ", used) : "")}");
                 }
                 if (groups.Count > 60) sb.AppendLine($"    ... e altri {groups.Count - 60} gruppi");
+
+                // Modelli delle entita' (CModelComponentData._fileName) e materiali sostituiti (CStaticComponentData._materialOverrides,
+                // originale -> sostituto): per togliere un solo tipo di decorazione (--togli-entita <file>:<modello>) e per capire
+                // quale modello o materiale da' problemi sulla Switch (dalla v58)
+                var models = entities.SelectMany(e => EntityModelNames(e).Distinct(StringComparer.OrdinalIgnoreCase))
+                    .GroupBy(m => m, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (models.Count > 0)
+                    sb.AppendLine($"    modelli ({models.Count}): {string.Join(", ", models.Take(30).Select(g => $"{g.Key} {g.Count()}"))}" +
+                                  (models.Count > 30 ? $" e altri {models.Count - 30}" : ""));
+                var overrides = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (igEntity entity in entities)
+                {
+                    foreach (CStaticComponentData staticData in entity.GetComponents().OfType<CStaticComponentData>())
+                    {
+                        CFxMaterialRedirectTable? table = staticData._materialOverrides;
+                        if (table == null) continue;
+                        if (table._default.Reference != null)
+                        {
+                            string defaultKey = $"tutti -> {RefText(table._default.Reference)}";
+                            overrides[defaultKey] = overrides.GetValueOrDefault(defaultKey) + 1;
+                        }
+                        int pairs = Math.Max(table._keys?._data.Count ?? 0, table._values?._data.Count ?? 0);
+                        for (int i = 0; i < pairs; i++)
+                        {
+                            NamedReference? from = table._keys != null && i < table._keys._data.Count ? table._keys._data[i]?.Reference : null;
+                            NamedReference? to = table._values != null && i < table._values._data.Count ? table._values._data[i]?.Reference : null;
+                            string pairKey = $"{RefText(from)} -> {RefText(to)}";
+                            overrides[pairKey] = overrides.GetValueOrDefault(pairKey) + 1;
+                        }
+                    }
+                }
+                if (overrides.Count > 0)
+                    sb.AppendLine($"    materiali sostituiti ({overrides.Count}): " +
+                                  string.Join(", ", overrides.OrderByDescending(o => o.Value).ThenBy(o => o.Key, StringComparer.OrdinalIgnoreCase)
+                                                            .Take(30).Select(o => $"{o.Key} ({o.Value})")) +
+                                  (overrides.Count > 30 ? $" e altri {overrides.Count - 30}" : ""));
 
                 int shown = 0, total = 0;
                 foreach (igEntity entity in entities)
@@ -5867,6 +5949,7 @@ namespace NST
             static string? Odd(float f) =>
                 float.IsNaN(f) ? "NaN" : float.IsInfinity(f) ? "infinito" : Math.Abs(f) > 1e9f ? "enorme" : f != 0 && Math.Abs(f) < 1e-30f ? "piccolissimo" : null;
             var found = new Dictionary<string, (int count, string example)>();
+            var oddScales = new List<string>();
             int scannedFiles = 0, unreadable = 0;
             foreach (IgArchiveFile file in output.Files.Where(f => f.IsIGZ() && f.Path.StartsWith("maps/", StringComparison.OrdinalIgnoreCase)))
             {
@@ -5919,12 +6002,28 @@ namespace NST
                         // un oggetto che non si esplora non cambia il resto
                     }
                 }
+                // Scale nulle, enormi o negative delle entita' (dalla v58): un modello schiacciato a zero su un asse ha normali
+                // impossibili (NaN nella luce, che poi si allarga a tutto lo schermo), una scala negativa lo ribalta
+                foreach (igEntity entity in igz.Objects.OfType<igEntity>())
+                {
+                    igVec3fMetaField? scale = entity._transform?._nonUniformPersistentParentSpaceScale;
+                    if (scale == null) continue;
+                    float smallest = Math.Min(Math.Abs(scale._x), Math.Min(Math.Abs(scale._y), Math.Abs(scale._z)));
+                    float largest = Math.Max(Math.Abs(scale._x), Math.Max(Math.Abs(scale._y), Math.Abs(scale._z)));
+                    bool negative = scale._x < 0 || scale._y < 0 || scale._z < 0;
+                    if (smallest >= 0.01f && largest <= 100f && !negative) continue;
+                    string why = smallest < 0.01f ? "quasi zero" : largest > 100f ? "enorme" : "negativa";
+                    oddScales.Add($"{fileName}: {entity.ObjectName ?? "?"} scala {FormatFloat(scale._x)} {FormatFloat(scale._y)} {FormatFloat(scale._z)} ({why})");
+                }
             }
             report.AppendLine($"  file controllati: {scannedFiles}" + (unreadable > 0 ? $" ({unreadable} non si rileggono)" : ""));
             if (found.Count == 0) report.AppendLine("  nessuno");
             foreach (var (key, (count, example)) in found.OrderByDescending(f => f.Value.count).Take(60))
                 report.AppendLine($"  {key}: {count} volte, per esempio {example}");
             if (found.Count > 60) report.AppendLine($"  ... e altri {found.Count - 60}");
+            report.AppendLine($"  scale delle entita' quasi zero (sotto 0,01), enormi (sopra 100) o negative: {(oddScales.Count == 0 ? "nessuna" : oddScales.Count.ToString())}");
+            foreach (string scaleLine in oddScales.Take(40)) report.AppendLine("    " + scaleLine);
+            if (oddScales.Count > 40) report.AppendLine($"    ... e altre {oddScales.Count - 40}");
             report.AppendLine();
         }
 
